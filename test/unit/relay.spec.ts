@@ -2,9 +2,10 @@
 // network). Covers dedupe, EOSE fast-path, timeout, dead/hanging/erroring
 // relay tolerance, junk frames, and clean CLOSE.
 import { afterEach, describe, expect, it } from "vitest";
-import type { NostrEvent } from "../../src/nostr/event";
+import { getEventId, type NostrEvent } from "../../src/nostr/event";
 import {
   fetchEvents,
+  MAX_EVENTS,
   setSocketFactoryForTests,
   type RelaySocket,
 } from "../../src/nostr/relay";
@@ -20,6 +21,8 @@ type MockBehavior = {
   events?: unknown[];
   /** send EOSE after events (default true) */
   eose?: boolean;
+  /** send a NIP-01 CLOSED frame after events instead of EOSE */
+  closedFrame?: boolean;
   /** close without EOSE after sending events */
   closeAfterEvents?: boolean;
   /** send junk frames before events */
@@ -63,6 +66,10 @@ function mockRelaySocket(behavior: MockBehavior): RelaySocket {
     }
     if (behavior.closeAfterEvents) {
       server.close(1000, "mock done");
+      return;
+    }
+    if (behavior.closedFrame) {
+      server.send(JSON.stringify(["CLOSED", subId, "auth-required: mock"]));
       return;
     }
     if (behavior.eose !== false) {
@@ -237,6 +244,64 @@ describe("fetchEvents", () => {
     const events = await fetchEvents(["wss://mock-noisy"], FILTER, 5_000);
     expect(ids(events)).toEqual(ids([aliceHello]));
   });
+
+  it("drops a forged event claiming another event's id (dedupe cannot be shadowed)", async () => {
+    // Same id as aliceHello, different content: a hostile relay trying to
+    // occupy the genuine event's dedupe slot so the real copy gets dropped.
+    const forged = { ...aliceHello, content: "FORGED — not alice's post" };
+    useMocks({
+      "wss://mock-evil": () => mockRelaySocket({ events: [forged] }),
+      "wss://mock-honest": () => mockRelaySocket({ events: [aliceHello] }),
+    });
+    const events = await fetchEvents(
+      ["wss://mock-evil", "wss://mock-honest"],
+      FILTER,
+      5_000,
+    );
+    // Regardless of frame arrival order, only the copy whose id matches its
+    // content survives.
+    expect(events).toHaveLength(1);
+    expect(events[0]!.content).toBe(aliceHello.content);
+  });
+
+  it("resolves promptly when a relay sends CLOSED instead of EOSE", async () => {
+    useMocks({
+      "wss://mock-closed": () =>
+        mockRelaySocket({ events: [aliceHello], eose: false, closedFrame: true }),
+    });
+    const start = Date.now();
+    const events = await fetchEvents(["wss://mock-closed"], FILTER, 10_000);
+    expect(Date.now() - start).toBeLessThan(3_000);
+    // events delivered before CLOSED still count
+    expect(ids(events)).toEqual(ids([aliceHello]));
+  });
+
+  it("caps collection at MAX_EVENTS when a relay floods without EOSE", async () => {
+    // Structurally valid events with correct ids (sig is never checked at
+    // collection time, only structure + id integrity).
+    const flood: NostrEvent[] = Array.from(
+      { length: MAX_EVENTS + 50 },
+      (_, i) => {
+        const tpl = {
+          pubkey: "a".repeat(64),
+          created_at: 1700000000 + i,
+          kind: 30023,
+          tags: [["d", `flood-${i}`]],
+          content: `flood ${i}`,
+        };
+        return { ...tpl, id: getEventId(tpl), sig: "0".repeat(128) };
+      },
+    );
+    useMocks({
+      "wss://mock-flood": () =>
+        mockRelaySocket({ events: flood, eose: false }),
+    });
+    const start = Date.now();
+    const events = await fetchEvents(["wss://mock-flood"], FILTER, 30_000);
+    // finishes at the cap, long before the timeout
+    expect(Date.now() - start).toBeLessThan(20_000);
+    expect(events).toHaveLength(MAX_EVENTS);
+  }, 30_000);
 
   it("drops structurally invalid events from relays", async () => {
     useMocks({

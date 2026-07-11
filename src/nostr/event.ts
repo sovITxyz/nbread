@@ -21,10 +21,21 @@ const HEX_64 = /^[0-9a-f]{64}$/;
 const HEX_128 = /^[0-9a-f]{128}$/;
 
 /**
+ * Size caps for untrusted events, enforced structurally BEFORE any hashing or
+ * signature work so oversized blobs from hostile relays/API bodies never reach
+ * serializeEvent/sha256/schnorr (free-tier budget: 10ms CPU per request).
+ * Lengths are UTF-16 code units (`string.length`), which lower-bounds bytes.
+ */
+export const MAX_CONTENT_LENGTH = 262_144; // 256 Ki code units
+export const MAX_TAGS = 2_000;
+export const MAX_TAG_ITEM_LENGTH = 8_192;
+
+/**
  * Structural validation for untrusted input (relay messages, API bodies).
- * Checks field presence and types only — no crypto. NIP-01 requires lowercase
- * hex for id/pubkey/sig, so uppercase is rejected as non-canonical. Extra
- * fields are tolerated (relays attach non-standard metadata).
+ * Checks field presence, types, and size caps only — no crypto. NIP-01
+ * requires lowercase hex for id/pubkey/sig, so uppercase is rejected as
+ * non-canonical. Extra fields are tolerated (relays attach non-standard
+ * metadata).
  */
 export function isNostrEvent(value: unknown): value is NostrEvent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -43,11 +54,14 @@ export function isNostrEvent(value: unknown): value is NostrEvent {
     return false;
   }
   if (typeof ev.content !== "string") return false;
+  if (ev.content.length > MAX_CONTENT_LENGTH) return false;
   if (!Array.isArray(ev.tags)) return false;
+  if (ev.tags.length > MAX_TAGS) return false;
   for (const tag of ev.tags) {
     if (!Array.isArray(tag)) return false;
     for (const item of tag) {
       if (typeof item !== "string") return false;
+      if (item.length > MAX_TAG_ITEM_LENGTH) return false;
     }
   }
   return true;

@@ -5,6 +5,9 @@ import {
   getDTag,
   getEventId,
   isNostrEvent,
+  MAX_CONTENT_LENGTH,
+  MAX_TAG_ITEM_LENGTH,
+  MAX_TAGS,
   resolveReplaceable,
   serializeEvent,
   verifyEvent,
@@ -109,6 +112,21 @@ describe("verifyEvent — structural rejection before crypto", () => {
     ["tag not an array", { ...aliceHello, tags: ["d"] }],
     ["non-string tag item", { ...aliceHello, tags: [["d", 42]] }],
     ["numeric content", { ...aliceHello, content: 42 }],
+    [
+      "oversized content (> MAX_CONTENT_LENGTH)",
+      { ...aliceHello, content: "x".repeat(MAX_CONTENT_LENGTH + 1) },
+    ],
+    [
+      "too many tags (> MAX_TAGS)",
+      {
+        ...aliceHello,
+        tags: Array.from({ length: MAX_TAGS + 1 }, () => ["t", "x"]),
+      },
+    ],
+    [
+      "oversized tag item (> MAX_TAG_ITEM_LENGTH)",
+      { ...aliceHello, tags: [["d", "x".repeat(MAX_TAG_ITEM_LENGTH + 1)]] },
+    ],
   ];
 
   for (const [label, value] of structurallyInvalid) {
@@ -122,6 +140,24 @@ describe("verifyEvent — structural rejection before crypto", () => {
     for (const ev of allValid) {
       expect(isNostrEvent(ev), `event ${ev.id}`).toBe(true);
     }
+  });
+
+  it("accepts sizes exactly at the caps (structural check only)", () => {
+    expect(
+      isNostrEvent({ ...aliceHello, content: "x".repeat(MAX_CONTENT_LENGTH) }),
+    ).toBe(true);
+    expect(
+      isNostrEvent({
+        ...aliceHello,
+        tags: Array.from({ length: MAX_TAGS }, () => ["t", "x"]),
+      }),
+    ).toBe(true);
+    expect(
+      isNostrEvent({
+        ...aliceHello,
+        tags: [["d", "x".repeat(MAX_TAG_ITEM_LENGTH)]],
+      }),
+    ).toBe(true);
   });
 });
 
