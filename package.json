@@ -1,0 +1,30 @@
+{
+  "name": "nostrbook",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Nostr-native blogging platform on Cloudflare Workers — posts are NIP-23 events, blogs live at handle.nostrbook.net",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fixtures": "node --experimental-strip-types scripts/gen-fixtures.ts",
+    "migrate:local": "wrangler d1 migrations apply nostrbook --local",
+    "smoke": "bash scripts/smoke.sh local",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "hono": "^4.12.29"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
+    "@types/node": "^26.1.1",
+    "nostr-tools": "^2.23.9",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.110.0"
+  }
+}

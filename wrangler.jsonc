@@ -1,0 +1,48 @@
+// Nostrbook — Cloudflare Worker configuration
+// One Worker + Static Assets (NOT Pages). Free tier: 10ms CPU/request budget.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nostrbook",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nostrbook",
+      // Placeholder until `wrangler d1 create nostrbook` is run against the real
+      // account (see docs/setup.md). Local dev + tests do not need the real id.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      // Placeholder until `wrangler kv namespace create KV` (see docs/setup.md).
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "vars": {
+    "MAIN_HOST": "nostrbook.net",
+    "ENVIRONMENT": "development",
+    // Cloudflare Turnstile "always passes" visible test site key; replace with the
+    // real site key at deploy time (docs/setup.md).
+    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+    "RELAYS": "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
+  },
+  // Secrets (set via `wrangler secret put`, never committed): TURNSTILE_SECRET_KEY
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "routes": [
+    { "pattern": "nostrbook.net/*", "zone_name": "nostrbook.net" },
+    { "pattern": "*.nostrbook.net/*", "zone_name": "nostrbook.net" }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,84 @@
+// Migration application check: 0001_init.sql applies to local D1 (done by the
+// test setup file) and produces the contracted schema.
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+
+describe("migrations/0001_init.sql", () => {
+  it("creates all contracted tables", async () => {
+    const { results } = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    ).all<{ name: string }>();
+    const names = results.map((r) => r.name);
+    for (const table of [
+      "users",
+      "events",
+      "profiles",
+      "reserved_handles",
+      "rate_limits",
+      "posts_fts",
+    ]) {
+      expect(names, `table ${table} must exist`).toContain(table);
+    }
+  });
+
+  it("creates the events feed index", async () => {
+    const row = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_events_feed'",
+    ).first<{ name: string }>();
+    expect(row?.name).toBe("idx_events_feed");
+  });
+
+  it("seeds the reserved handles", async () => {
+    const { results } = await env.DB.prepare(
+      "SELECT handle FROM reserved_handles ORDER BY handle",
+    ).all<{ handle: string }>();
+    const handles = results.map((r) => r.handle);
+    expect(handles).toEqual(
+      [
+        "www",
+        "api",
+        "admin",
+        "staff",
+        "static",
+        "mail",
+        "blog",
+        "help",
+        "about",
+        "root",
+        "_dmarc",
+      ].sort(),
+    );
+  });
+
+  it("enforces the replaceable uniqueness constraint on events", async () => {
+    await env.DB.prepare(
+      "INSERT INTO events (id, pubkey, kind, d_tag, created_at, content, tags, sig, raw) VALUES ('e1','pk1',30023,'slug',1,'','[]','sig','{}')",
+    ).run();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO events (id, pubkey, kind, d_tag, created_at, content, tags, sig, raw) VALUES ('e2','pk1',30023,'slug',2,'','[]','sig','{}')",
+      ).run(),
+    ).rejects.toThrow(/UNIQUE/);
+  });
+
+  it("posts_fts is a working FTS5 table (insert + MATCH)", async () => {
+    await env.DB.prepare(
+      "INSERT INTO posts_fts (rowid, title, summary, content) VALUES (1, 'Hello world', 'a summary', 'searchable body text')",
+    ).run();
+    const { results } = await env.DB.prepare(
+      "SELECT rowid FROM posts_fts WHERE posts_fts MATCH 'searchable'",
+    ).all<{ rowid: number }>();
+    expect(results.length).toBe(1);
+  });
+
+  it("users.handle is unique case-insensitively (COLLATE NOCASE)", async () => {
+    await env.DB.prepare(
+      "INSERT INTO users (pubkey, handle, claimed_at) VALUES ('pkA', 'CaseTest', '2026-01-01')",
+    ).run();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO users (pubkey, handle, claimed_at) VALUES ('pkB', 'casetest', '2026-01-01')",
+      ).run(),
+    ).rejects.toThrow(/UNIQUE/);
+  });
+});
