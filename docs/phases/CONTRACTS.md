@@ -73,3 +73,6 @@ renderPost(md: string): string        // markdown-it + strict sanitizer; NO raw 
 
 ## Addendum (P0, orchestrator-approved)
 - `src/middleware/guard.ts` honors a client-supplied `X-Forwarded-Host` header as the Host override **only when `ENVIRONMENT === "development"`** (needed because `wrangler dev` rewrites the Host header). The committed `wrangler.jsonc` ships `ENVIRONMENT="production"`, so the override is dead in any stock deploy; dev gets it via `.dev.vars`. Do not widen this affordance.
+
+## Addendum (P2→P3, orchestrator-approved)
+- `MAX_MARKDOWN_LENGTH` is 32 KiB (DoS bound for markdown-it superlinear inputs). To keep public request CPU under the free-tier 10ms budget, **P3 must render at ingest**: migration `0002` adds `rendered TEXT` to `events` (or a sibling table); `mirrorEvent` runs renderPost+sanitize once at mirror time and stores the HTML; the tenant post view serves the stored HTML and must NOT call renderPost per request. Theme CSS is already pass-capped; P5 should additionally sanitize CSS at settings-save time.
