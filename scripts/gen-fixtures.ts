@@ -269,6 +269,73 @@ const deleteEvent = sign(alice, {
   content: "delete test",
 });
 
+// --- P3 extras -----------------------------------------------------------------
+// Cross-pubkey delete attempt: MALLORY signs a kind 5 referencing ALICE's
+// post. The mirror service must ignore the references (kind 5 only deletes
+// the signer's own events).
+const deleteByMallory = sign(mallory, {
+  kind: 5,
+  created_at: T0 + 800,
+  tags: [
+    ["e", posts["aliceHello"]!.id],
+    ["a", `30023:${alice.pk}:hello-world`],
+  ],
+  content: "hostile cross-pubkey delete attempt",
+});
+
+// Stale kind 0 for alice (older created_at) — profiles upsert must keep the
+// newer profile when this arrives later.
+const aliceProfileOld = sign(alice, {
+  kind: 0,
+  created_at: T0 - 100,
+  tags: [],
+  content: JSON.stringify({
+    name: "alice-old",
+    about: "stale profile — must lose to the newer kind 0",
+  }),
+});
+
+// Replaceable tie pair: same pubkey/kind/d-tag AND same created_at, different
+// content → different ids. NIP-01 tie-break: the lexicographically LOWER id
+// wins. Tests compute which of the two that is at runtime.
+const tieA = sign(alice, {
+  kind: 30023,
+  created_at: T0 + 900,
+  tags: [
+    ["d", "tie-break"],
+    ["title", "Tie candidate A"],
+  ],
+  content: "Tie candidate A body.\n",
+});
+const tieB = sign(alice, {
+  kind: 30023,
+  created_at: T0 + 900,
+  tags: [
+    ["d", "tie-break"],
+    ["title", "Tie candidate B"],
+  ],
+  content: "Tie candidate B body.\n",
+});
+
+// Bulk bob posts (12) — exercises the npub on-demand mirror cap (newest 10
+// events per request) and progressive backfill.
+const bulkBob: NostrEvent[] = [];
+for (let i = 1; i <= 12; i++) {
+  const nn = String(i).padStart(2, "0");
+  bulkBob.push(
+    sign(bob, {
+      kind: 30023,
+      created_at: T0 + 1000 + i,
+      tags: [
+        ["d", `bulk-${nn}`],
+        ["title", `Bulk post ${nn}`],
+        ["published_at", String(T0 + 1000 + i)],
+      ],
+      content: `Bulk body ${nn}.\n`,
+    }),
+  );
+}
+
 // --- tampered variants ---------------------------------------------------------
 const base = posts["aliceHello"]!;
 
@@ -313,7 +380,15 @@ const validEvents: NostrEvent[] = [
   replaceableStale,
   replaceableNewer,
   deleteEvent,
+  deleteByMallory,
+  aliceProfileOld,
+  tieA,
+  tieB,
+  ...bulkBob,
 ];
+if (tieA.id === tieB.id) {
+  throw new Error("self-check failed: tie pair must have distinct ids");
+}
 for (const ev of validEvents) {
   if (!verifyEvent(stripCache(ev))) {
     throw new Error(`self-check failed: valid event does not verify: ${ev.id}`);
@@ -356,6 +431,12 @@ writeFileSync(
       posts,
       replaceable: { stale: replaceableStale, newer: replaceableNewer },
       delete: deleteEvent,
+      extras: {
+        deleteByMallory,
+        aliceProfileOld,
+        tie: { a: tieA, b: tieB },
+        bulkBob,
+      },
       tampered,
     },
     null,
