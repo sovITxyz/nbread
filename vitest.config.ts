@@ -24,6 +24,10 @@ export default defineConfig(async () => {
             // tests exercise the dev-only X-Forwarded-Host affordance, and
             // CI has no .dev.vars, so override it here.
             ENVIRONMENT: "development",
+            // Cloudflare's official always-passing Turnstile TEST secret —
+            // CI has no .dev.vars, and the turnstile unit spec asserts the
+            // exact form body the default verifier POSTs.
+            TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
           },
         },
       }),
