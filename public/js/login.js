@@ -41,8 +41,17 @@
       var signed = await window.nostr.signEvent({
         kind: 22242,
         created_at: Math.floor(Date.now() / 1000),
-        tags: [["challenge", challenge]],
-        content: "",
+        tags: [
+          // Binds the signature to THIS service: the server refuses events
+          // whose relay tag names any other host, so a signature phished
+          // through a third-party site's login flow is useless here — and
+          // the tag surfaces the destination in the extension's prompt.
+          ["relay", "wss://" + location.host],
+          ["challenge", challenge],
+        ],
+        // Human-readable statement of intent for the signing prompt
+        // (transparency only — the relay tag is what the server enforces).
+        content: "Log in to " + location.host,
       });
 
       say("Signing in…");

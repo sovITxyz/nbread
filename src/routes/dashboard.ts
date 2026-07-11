@@ -116,7 +116,7 @@ const CLAIM_ERROR_RESPONSES: Record<
   invalid: {
     status: 400,
     message:
-      "Handles are 2–31 characters: lowercase letters, digits, and hyphens (must start with a letter or digit).",
+      "Handles are 2–31 characters: lowercase letters, digits, and hyphens (must start and end with a letter or digit).",
   },
   reserved: { status: 400, message: "That handle is reserved." },
   taken: { status: 409, message: "That handle is already taken." },

@@ -1,9 +1,10 @@
 // P4 auth: NIP-07 / kind 22242 challenge-response login. Covers the happy
-// path, every rejection class (forged sig, wrong kind, stale created_at,
-// expired/replayed/unknown nonce, wrong pubkey), cookie flags, session
-// persistence, logout, fixation resistance, and the login/challenge rate
-// limits. Login events are signed in-test with nostr-tools using the
-// committed throwaway fixture keys.
+// path, every rejection class (forged sig, wrong kind, stale created_at
+// incl. the exact ±600s boundary, expired/replayed/unknown nonce, wrong
+// pubkey, missing/misbound relay tag), cookie flags, session persistence,
+// logout, fixation resistance, and the login/challenge rate limits (per-IP
+// and the global daily challenge budget). Login events are signed in-test
+// with nostr-tools using the committed throwaway fixture keys.
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -14,10 +15,27 @@ import {
   resetRateLimits,
   signLoginEvent,
 } from "../helpers";
-import { nonceKey, NONCE_TTL_SECONDS } from "../../src/routes/auth";
+import {
+  CHALLENGE_GLOBAL_DAILY_CAP,
+  CHALLENGE_GLOBAL_KEY,
+  nonceKey,
+  NONCE_TTL_SECONDS,
+} from "../../src/routes/auth";
 import { sessionKey, SESSION_TTL_SECONDS } from "../../src/services/sessions";
 
 const now = () => Math.floor(Date.now() / 1000);
+
+/**
+ * Park the wall clock just after a second boundary so second-granularity
+ * boundary tests (created_at exactly ±600s) cannot flake when the request
+ * itself crosses into the next second: after aligning there are ~700ms of
+ * headroom, and the whole sign+POST round-trip takes a few dozen ms.
+ */
+async function alignToSecondStart(): Promise<void> {
+  while (Date.now() % 1000 > 300) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 function flipLastChar(hex: string): string {
   return hex.slice(0, -1) + (hex.endsWith("0") ? "1" : "0");
@@ -124,6 +142,57 @@ describe("POST /login", () => {
     const c2 = await getChallenge();
     const future = await postLogin(signLoginEvent(c2, { created_at: now() + 3600 }));
     expect(future.status).toBe(401);
+  });
+
+  it("accepts created_at exactly at ±600s (window is inclusive)", async () => {
+    await alignToSecondStart();
+    const c1 = await getChallenge();
+    const past = await postLogin(signLoginEvent(c1, { created_at: now() - 600 }));
+    expect(past.status).toBe(200);
+    await alignToSecondStart();
+    const c2 = await getChallenge();
+    const future = await postLogin(signLoginEvent(c2, { created_at: now() + 600 }));
+    expect(future.status).toBe(200);
+  });
+
+  it("rejects created_at at ±601s (just outside the window)", async () => {
+    await alignToSecondStart();
+    const c1 = await getChallenge();
+    const past = await postLogin(signLoginEvent(c1, { created_at: now() - 601 }));
+    expect(past.status).toBe(401);
+    await alignToSecondStart();
+    const c2 = await getChallenge();
+    const future = await postLogin(signLoginEvent(c2, { created_at: now() + 601 }));
+    expect(future.status).toBe(401);
+  });
+
+  it("rejects an event with no relay binding tag", async () => {
+    const challenge = await getChallenge();
+    const res = await postLogin(signLoginEvent(challenge, { relay: null }));
+    expect(res.status).toBe(401);
+    // Rejected before the nonce lookup — the nonce is NOT burned.
+    expect(await env.KV.get(nonceKey(challenge))).not.toBeNull();
+  });
+
+  it("rejects an event bound to another service (challenge-proxy phishing)", async () => {
+    for (const relay of [
+      "wss://evil.example",
+      "wss://nostrbook.net.evil.example",
+      "https://evil.example/nostrbook.net",
+      "not a url at all",
+    ]) {
+      const challenge = await getChallenge();
+      const res = await postLogin(signLoginEvent(challenge, { relay }));
+      expect(res.status, `relay ${JSON.stringify(relay)}`).toBe(401);
+    }
+  });
+
+  it("accepts an https:// relay binding for MAIN_HOST too", async () => {
+    const challenge = await getChallenge();
+    const res = await postLogin(
+      signLoginEvent(challenge, { relay: "https://nostrbook.net" }),
+    );
+    expect(res.status).toBe(200);
   });
 
   it("rejects an expired nonce (KV TTL lapsed)", async () => {
@@ -242,9 +311,9 @@ describe("auth rate limits (D1 rate_limits)", () => {
     expect(eleventh.status).toBe(429);
   });
 
-  it("challenge: 30 per 15min per IP, 31st is 429", async () => {
+  it("challenge: 10 per 15min per IP, 11th is 429", async () => {
     const ip = "192.0.2.12";
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 10; i++) {
       const res = await SELF.fetch("https://nostrbook.net/login/challenge", {
         headers: { "CF-Connecting-IP": ip },
       });
@@ -252,6 +321,24 @@ describe("auth rate limits (D1 rate_limits)", () => {
     }
     const res = await SELF.fetch("https://nostrbook.net/login/challenge", {
       headers: { "CF-Connecting-IP": ip },
+    });
+    expect(res.status).toBe(429);
+  });
+
+  it("challenge: global daily cap trips across IPs (KV write budget guard)", async () => {
+    // Seed the global fixed-window counter at the cap directly (500 real
+    // requests would be slow); the very next challenge — from a fresh IP
+    // that has never hit its own limit — must be denied.
+    const windowSeconds = 86_400;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const windowStart = nowSec - (nowSec % windowSeconds);
+    await env.DB.prepare(
+      "INSERT INTO rate_limits (key, count, window_start) VALUES (?, ?, ?)",
+    )
+      .bind(CHALLENGE_GLOBAL_KEY, CHALLENGE_GLOBAL_DAILY_CAP, windowStart)
+      .run();
+    const res = await SELF.fetch("https://nostrbook.net/login/challenge", {
+      headers: { "CF-Connecting-IP": "192.0.2.99" },
     });
     expect(res.status).toBe(429);
   });

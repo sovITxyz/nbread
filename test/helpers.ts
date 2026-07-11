@@ -62,17 +62,28 @@ export async function resetUsers(): Promise<void> {
 /**
  * Sign a kind 22242 login event for a challenge with one of the committed
  * throwaway fixture keys (nostr-tools). Overrides let tests build the
- * rejection cases (wrong kind, stale created_at, forged fields).
+ * rejection cases (wrong kind, stale created_at, forged fields, missing or
+ * misbound relay tag — pass `relay: null` to omit the tag entirely).
  */
 export function signLoginEvent(
   challenge: string,
-  opts: { sk?: string; kind?: number; created_at?: number } = {},
+  opts: {
+    sk?: string;
+    kind?: number;
+    created_at?: number;
+    relay?: string | null;
+  } = {},
 ): NostrEvent {
+  const tags: string[][] = [];
+  if (opts.relay !== null) {
+    tags.push(["relay", opts.relay ?? "wss://nostrbook.net"]);
+  }
+  tags.push(["challenge", challenge]);
   return finalizeEvent(
     {
       kind: opts.kind ?? 22242,
       created_at: opts.created_at ?? Math.floor(Date.now() / 1000),
-      tags: [["challenge", challenge]],
+      tags,
       content: "",
     },
     hexToBytes(opts.sk ?? ALICE_SK),

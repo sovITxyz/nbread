@@ -59,7 +59,7 @@ export function DashboardPage(props: {
                   required
                   minlength={2}
                   maxlength={31}
-                  pattern="[a-z0-9][a-z0-9\-]{1,30}"
+                  pattern="[a-z0-9][a-z0-9\-]{0,29}[a-z0-9]"
                   autocomplete="off"
                   spellcheck={false}
                   placeholder="yourname"

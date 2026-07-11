@@ -29,8 +29,18 @@ export async function getUserByPubkey(
   return row ?? null;
 }
 
-/** Contract handle shape: lowercase, digits, interior hyphens, 2–31 chars. */
-export const HANDLE_REGEX = /^[a-z0-9][a-z0-9-]{1,30}$/;
+/**
+ * Handle shape: lowercase letters/digits with interior hyphens, 2–31 chars,
+ * both ends alphanumeric.
+ *
+ * P4 review addendum (tightens the contract regex `^[a-z0-9][a-z0-9-]{1,30}$`,
+ * pending orchestrator ratification): the contract shape admitted trailing
+ * hyphens ("ab-"), but the host guard's RFC-1035 DNS_LABEL rejects them —
+ * a claimed "ab-" would burn the key's ONE allowed handle on a subdomain the
+ * guard 404s forever, irrecoverably (one handle per pubkey). Aligned with
+ * guard.ts DNS_LABEL so every claimable handle is a routable host label.
+ */
+export const HANDLE_REGEX = /^[a-z0-9][a-z0-9-]{0,29}[a-z0-9]$/;
 
 export type ClaimErrorCode =
   | "invalid" // fails HANDLE_REGEX

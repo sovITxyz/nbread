@@ -120,11 +120,13 @@ describe("POST /dashboard/claim", () => {
     expect(missing.status).toBe(403);
   });
 
-  it("rejects invalid handles (regex ^[a-z0-9][a-z0-9-]{1,30}$)", async () => {
+  it("rejects invalid handles (regex ^[a-z0-9][a-z0-9-]{0,29}[a-z0-9]$)", async () => {
     const sid = await createSession(env, ALICE_PK);
     const invalid = [
       "a", // too short
       "-alice", // leading hyphen
+      "trailing-", // trailing hyphen (guard's DNS_LABEL would 404 the subdomain)
+      "ab-", // trailing hyphen, minimum-length variant
       "Alice", // uppercase (no silent lowercasing)
       "al_ice", // underscore
       "al.ice", // dot
