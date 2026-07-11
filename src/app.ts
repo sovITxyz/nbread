@@ -3,6 +3,8 @@ import type { AppEnv, DispatchEnv, Site } from "./types";
 import { guard } from "./middleware/guard";
 import { tenant } from "./middleware/tenant";
 import { cache } from "./middleware/cache";
+import { csrf } from "./middleware/csrf";
+import { session } from "./middleware/session";
 import { mainRoutes } from "./routes/main";
 import { tenantRoutes } from "./routes/tenant";
 import { apiRoutes } from "./routes/api";
@@ -29,8 +31,12 @@ const siteFromEnv = (app: Hono<DispatchEnv>): Hono<DispatchEnv> => {
 
 // --- Main site (apex) --------------------------------------------------------
 const mainApp = siteFromEnv(new Hono<DispatchEnv>());
+// CSRF first (same-origin proof for unsafe methods, JSON APIs included),
+// then sessions — both main-site only, both before every route.
+mainApp.use("*", csrf);
+mainApp.use("*", session);
 mainApp.route("/", mainRoutes);
-mainApp.route("/auth", authRoutes);
+mainApp.route("/", authRoutes); // /login, /login/challenge, /logout
 mainApp.route("/dashboard", dashboardRoutes);
 mainApp.route("/api", apiRoutes);
 mainApp.route("/.well-known", wellknownRoutes);

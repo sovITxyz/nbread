@@ -59,7 +59,7 @@ FAIL=0
 # used to select the tenant. Remote mode: hits the real host in the URL.
 check() {
   local desc="$1" expected="$2" host_header="$3" path="$4"
-  local args=(-s -o /tmp/smoke_body -w '%{http_code}' --max-time 15)
+  local args=(-s -o /tmp/smoke_body -D /tmp/smoke_headers -w '%{http_code}' --max-time 15)
   local url
   if [[ "$TARGET" == "local" ]]; then
     url="$BASE$path"
@@ -91,6 +91,45 @@ check_body_contains() {
   fi
 }
 
+check_header_contains() {
+  local desc="$1" needle="$2"
+  if grep -qi "$needle" /tmp/smoke_headers; then
+    echo "PASS  [hdr]  $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL  [hdr]  $desc (missing: $needle)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# check_post <desc> <expected-code> <host> <path> <json-body> [origin]
+check_post() {
+  local desc="$1" expected="$2" host_header="$3" path="$4" data="$5" origin="${6:-}"
+  local args=(-s -o /tmp/smoke_body -D /tmp/smoke_headers -w '%{http_code}' \
+    --max-time 15 -X POST -H 'Content-Type: application/json' --data "$data")
+  if [[ -n "$origin" ]]; then
+    args+=(-H "Origin: $origin")
+  fi
+  local url
+  if [[ "$TARGET" == "local" ]]; then
+    url="$BASE$path"
+    if [[ -n "$host_header" ]]; then
+      args+=(-H "X-Forwarded-Host: $host_header")
+    fi
+  else
+    url="https://$host_header$path"
+  fi
+  local code
+  code=$(curl "${args[@]}" "$url" || echo "000")
+  if [[ "$code" == "$expected" ]]; then
+    echo "PASS  [$code] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL  [$code != $expected] $desc"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 # --- P0: hello checks ---------------------------------------------------------
 check "apex / responds 200" 200 "$MAIN_HOST" "/"
 check_body_contains "apex / mentions Nostrbook" "Nostrbook"
@@ -109,6 +148,18 @@ fi
 # --- P3: ingestion + public blogs ----------------------------------------------
 # A shape-valid npub with a bad checksum must 404 (no relay fetch happens).
 check "malformed npub is 404" 404 "$MAIN_HOST" "/npub1$(printf 'z%.0s' $(seq 1 58))"
+
+# --- P4: auth + handle claim + NIP-05 -------------------------------------------
+check "login page responds 200" 200 "$MAIN_HOST" "/login"
+check_body_contains "login page ships the NIP-07 button" "login-button"
+check "login.js asset served" 200 "$MAIN_HOST" "/js/login.js"
+check "nip05 unknown name responds 200" 200 "$MAIN_HOST" "/.well-known/nostr.json?name=nosuchuser"
+check_body_contains "nip05 unknown name is empty" '"names":{}'
+check_header_contains "nip05 sends CORS *" "access-control-allow-origin: \*"
+check "dashboard redirects anonymous to login" 302 "$MAIN_HOST" "/dashboard"
+check_post "login rejects a garbage body" 400 "$MAIN_HOST" "/login" '{"not":"an event"}'
+check_post "login enforces CSRF (cross-origin)" 403 "$MAIN_HOST" "/login" '{}' "https://evil.example"
+check_post "claim requires a session" 401 "$MAIN_HOST" "/dashboard/claim" '{}'
 
 echo
 echo "smoke: $PASS passed, $FAIL failed"

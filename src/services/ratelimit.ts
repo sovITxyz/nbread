@@ -33,3 +33,22 @@ export async function checkRateLimit(
   const count = row?.count ?? Number.MAX_SAFE_INTEGER;
   return { allowed: count <= max, remaining: Math.max(0, max - count) };
 }
+
+/**
+ * Fail-closed convenience wrapper for abuse-sensitive endpoints (P4 auth /
+ * claim): a D1 error denies the request instead of letting it through
+ * unmetered. Same policy as the P3 npub mirror budget.
+ */
+export async function rateLimitAllows(
+  env: Env,
+  key: string,
+  max: number,
+  windowSeconds: number,
+): Promise<boolean> {
+  try {
+    return (await checkRateLimit(env, key, max, windowSeconds)).allowed;
+  } catch (err) {
+    console.error(`rate limit check failed for ${key}:`, err);
+    return false;
+  }
+}

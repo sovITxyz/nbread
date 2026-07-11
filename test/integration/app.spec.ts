@@ -45,17 +45,19 @@ describe("worker end-to-end (SELF.fetch)", () => {
     expect(res.status).toBe(404);
   });
 
-  it("stubbed phase endpoints respond 501, not 404, on the apex", async () => {
-    const login = await SELF.fetch("https://nostrbook.net/auth/login");
-    expect(login.status).toBe(501);
-    const nip05 = await SELF.fetch(
-      "https://nostrbook.net/.well-known/nostr.json?name=alice",
-    );
-    expect(nip05.status).toBe(501);
+  it("P5-stubbed endpoints respond 501, not 404, on the apex", async () => {
+    const mirror = await SELF.fetch("https://nostrbook.net/api/mirror", {
+      method: "POST",
+    });
+    expect(mirror.status).toBe(501);
   });
 
-  it("apex routes are not exposed on blog subdomains", async () => {
-    const res = await SELF.fetch("https://alice.nostrbook.net/auth/login");
-    expect(res.status).toBe(404);
+  it("apex auth/dashboard routes are not exposed on blog subdomains", async () => {
+    // On a blog subdomain these fall through to the tenant slug route and
+    // 404 (no such post) — the apex login/dashboard pages must not render.
+    const login = await SELF.fetch("https://alice.nostrbook.net/login");
+    expect(login.status).toBe(404);
+    const dashboard = await SELF.fetch("https://alice.nostrbook.net/dashboard");
+    expect(dashboard.status).toBe(404);
   });
 });

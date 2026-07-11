@@ -1,6 +1,9 @@
 # public/js
 
-Client-side NIP-07 glue lands here in later phases:
+Client-side NIP-07 glue:
 
-- `login.js` (P4) — build + sign the kind 22242 auth event via `window.nostr`.
-- `editor.js` (P5) — build kind 30023, sign, broadcast to relays, POST to `/api/mirror`.
+- `login.js` (P4) — fetches a one-time challenge, signs the kind 22242 auth
+  event via `window.nostr`, POSTs it to `/login`. Keys never leave the
+  extension.
+- `editor.js` (P5, upcoming) — build kind 30023, sign, broadcast to relays,
+  POST to `/api/mirror`.

@@ -1,9 +1,15 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { finalizeEvent } from "nostr-tools/pure";
+import { hexToBytes } from "@noble/hashes/utils.js";
 import keys from "./fixtures/keys.json";
+import type { NostrEvent } from "../src/nostr/event";
 
 export const ALICE_PK = keys.alice.pk;
 export const BOB_PK = keys.bob.pk;
 export const MALLORY_PK = keys.mallory.pk;
+export const ALICE_SK = keys.alice.sk;
+export const BOB_SK = keys.bob.sk;
+export const MALLORY_SK = keys.mallory.sk;
 
 /** Seed alice as a claimed user (handle "alice") into the test D1. */
 export async function seedAlice(): Promise<void> {
@@ -37,6 +43,69 @@ export async function resetMirrorState(): Promise<void> {
   await Promise.all(
     [ALICE_PK, BOB_PK, MALLORY_PK].map((pk) => env.KV.delete(`gen:${pk}`)),
   );
+}
+
+/**
+ * Wipe rate-limit counters. The D1 rate_limits table persists across `it`
+ * blocks within a file; auth/claim specs reset it so unrelated tests never
+ * trip each other's per-IP windows.
+ */
+export async function resetRateLimits(): Promise<void> {
+  await env.DB.prepare("DELETE FROM rate_limits").run();
+}
+
+/** Wipe all users (claim specs need a clean slate per test). */
+export async function resetUsers(): Promise<void> {
+  await env.DB.prepare("DELETE FROM users").run();
+}
+
+/**
+ * Sign a kind 22242 login event for a challenge with one of the committed
+ * throwaway fixture keys (nostr-tools). Overrides let tests build the
+ * rejection cases (wrong kind, stale created_at, forged fields).
+ */
+export function signLoginEvent(
+  challenge: string,
+  opts: { sk?: string; kind?: number; created_at?: number } = {},
+): NostrEvent {
+  return finalizeEvent(
+    {
+      kind: opts.kind ?? 22242,
+      created_at: opts.created_at ?? Math.floor(Date.now() / 1000),
+      tags: [["challenge", challenge]],
+      content: "",
+    },
+    hexToBytes(opts.sk ?? ALICE_SK),
+  ) as NostrEvent;
+}
+
+/** Fetch a login challenge nonce from the worker. */
+export async function getChallenge(ip = "10.0.0.1"): Promise<string> {
+  const res = await SELF.fetch("https://nostrbook.net/login/challenge", {
+    headers: { "CF-Connecting-IP": ip },
+  });
+  if (res.status !== 200) {
+    throw new Error(`challenge request failed: ${res.status}`);
+  }
+  const body = (await res.json()) as { challenge: string };
+  return body.challenge;
+}
+
+/** POST a login event to /login. */
+export function postLogin(
+  event: unknown,
+  opts: { ip?: string; cookie?: string } = {},
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "CF-Connecting-IP": opts.ip ?? "10.0.0.1",
+  };
+  if (opts.cookie) headers.Cookie = opts.cookie;
+  return SELF.fetch("https://nostrbook.net/login", {
+    method: "POST",
+    headers,
+    body: typeof event === "string" ? event : JSON.stringify(event),
+  });
 }
 
 /** All real tags (`<...>`) in an HTML string. Escaped text can't contain `<`. */
