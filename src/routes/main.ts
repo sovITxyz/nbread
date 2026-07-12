@@ -9,12 +9,23 @@ import { getUserByPubkey } from "../services/users";
 import { bumpGen, mirrorEvent } from "../services/mirror";
 import { checkRateLimit } from "../services/ratelimit";
 import {
+  DISCOVER_MAX_PAGE,
+  DISCOVER_PAGE_SIZE,
   getPost as getPostRow,
   listPostsByPubkey,
+  listRecentClaimedPosts,
   oldestCreatedAt,
   rowToEvent,
   storedEventIds,
 } from "../services/events";
+import {
+  SEARCH_MAX_QUERY_CHARS,
+  searchPosts,
+} from "../services/search";
+import { rateLimitAllows } from "../services/ratelimit";
+import { feedItems } from "../views/main/feed";
+import { DiscoverPage } from "../views/main/discover";
+import { SearchPage } from "../views/main/search";
 import { getProfile as getProfileRow } from "../services/profiles";
 import { relayList } from "../cron/refresh";
 import { defaultCache } from "../middleware/cache";
@@ -32,6 +43,93 @@ mainRoutes.get("/", (c) => c.html(MainHome()));
 mainRoutes.get("/healthz", (c) =>
   c.json({ ok: true, service: "nostrbook", environment: c.env.ENVIRONMENT }),
 );
+
+// --- nostrbook.net/discover — cross-tenant recent-posts feed (P6) -------------
+// Serves STORED data only (titles/summaries from tag strings, escaped text —
+// never renderPost) to stay inside the 10ms public-path CPU budget. The
+// per-tenant gen cache (middleware/cache.ts) keys on ONE pubkey's generation
+// and cannot represent a cross-tenant page, so discover is not edge-cached
+// through it; a short public s-maxage bounds origin hits instead. No KV
+// reads or writes on this path.
+
+/** Edge/browser cache hint for the discover feed (seconds). */
+export const DISCOVER_CACHE_SECONDS = 300;
+
+/**
+ * Clamp a raw ?page= value to [1, DISCOVER_MAX_PAGE]. Garbage, negatives,
+ * zero, and absurd depths all degrade to a valid page — never a 500, never
+ * an unbounded OFFSET.
+ */
+export function clampPage(raw: string | undefined): number {
+  if (!raw || !/^[0-9]{1,6}$/.test(raw)) return 1;
+  const n = Number(raw);
+  if (n < 1) return 1;
+  return Math.min(n, DISCOVER_MAX_PAGE);
+}
+
+mainRoutes.get("/discover", async (c) => {
+  const page = clampPage(c.req.query("page"));
+  const offset = (page - 1) * DISCOVER_PAGE_SIZE;
+  // Fetch one extra row to detect whether an older page exists.
+  const rows = await listRecentClaimedPosts(
+    c.env,
+    DISCOVER_PAGE_SIZE + 1,
+    offset,
+  );
+  const hasNext = rows.length > DISCOVER_PAGE_SIZE && page < DISCOVER_MAX_PAGE;
+  const mainHost = c.env.MAIN_HOST.toLowerCase();
+  c.header("Cache-Control", `public, s-maxage=${DISCOVER_CACHE_SECONDS}`);
+  return c.html(
+    DiscoverPage({
+      items: feedItems(rows.slice(0, DISCOVER_PAGE_SIZE), mainHost),
+      page,
+      hasNext,
+      mainHost,
+    }),
+  );
+});
+
+// --- nostrbook.net/search — FTS5 search over mirrored posts (P6) --------------
+// Public D1-query endpoint, so a light per-IP rate limit applies (D1
+// rate_limits via the existing checkRateLimit — zero KV writes). The bound
+// is generous for humans: 30 queries/minute/IP.
+
+/** Max search queries per IP per window. */
+export const SEARCH_RATE_MAX = 30;
+/** Search rate-limit window (seconds). */
+export const SEARCH_RATE_WINDOW_SECONDS = 60;
+
+mainRoutes.get("/search", async (c) => {
+  const mainHost = c.env.MAIN_HOST.toLowerCase();
+  // Cap length up front; the sanitizer in searchPosts caps again.
+  const query = (c.req.query("q") ?? "").slice(0, SEARCH_MAX_QUERY_CHARS);
+  if (query.trim() === "") {
+    // Bare form — no D1 query, no rate-limit spend.
+    return c.html(SearchPage({ query: "", results: null, mainHost }));
+  }
+  const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+  const allowed = await rateLimitAllows(
+    c.env,
+    `search:ip:${ip}`,
+    SEARCH_RATE_MAX,
+    SEARCH_RATE_WINDOW_SECONDS,
+  );
+  if (!allowed) {
+    return c.html(
+      SearchPage({
+        query,
+        results: null,
+        mainHost,
+        error: "Too many searches — please wait a minute and try again.",
+      }),
+      429,
+    );
+  }
+  const rows = await searchPosts(c.env, query);
+  return c.html(
+    SearchPage({ query, results: feedItems(rows, mainHost), mainHost }),
+  );
+});
 
 // --- nostrbook.net/npub1… — on-demand blogs for UNCLAIMED pubkeys -------------
 // Claimed pubkeys redirect to their subdomain; unclaimed ones get fetched

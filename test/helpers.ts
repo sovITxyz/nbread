@@ -21,6 +21,15 @@ export async function seedAlice(): Promise<void> {
     .run();
 }
 
+/** Seed bob as a claimed user (handle "bob") into the test D1. */
+export async function seedBob(): Promise<void> {
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO users (pubkey, handle, claimed_at) VALUES (?, ?, ?)",
+  )
+    .bind(BOB_PK, "bob", new Date().toISOString())
+    .run();
+}
+
 /** Seed a blocked user (mallory, handle "blocked") into the test D1. */
 export async function seedBlockedMallory(): Promise<void> {
   await env.DB.prepare(
@@ -184,6 +193,37 @@ export function signDeleteEvent(opts: {
     hexToBytes(opts.sk ?? ALICE_SK),
   ) as NostrEvent;
 }
+
+/**
+ * Hostile FTS5 MATCH corpus (P6 brief: `"`, `*`, `NEAR(`, `-`, `a OR b`,
+ * `title:x`, `(`, `a"b`, bare operators) + extras. Shared by the sanitizer
+ * unit spec (output shape) and the search integration spec (HTTP 200, never
+ * a 5xx).
+ */
+export const MATCH_INJECTION_CORPUS = [
+  '"',
+  "*",
+  "NEAR(",
+  "-",
+  "a OR b",
+  "title:x",
+  "(",
+  'a"b',
+  "AND",
+  "OR",
+  "NOT",
+  "NEAR",
+  "^first",
+  "a* b*",
+  "-excluded term",
+  '"unbalanced phrase',
+  "((()))",
+  "title : x",
+  "content:secret OR summary:hidden",
+  'a AND -b OR (c NEAR/2 d)* ^e "f',
+  "{col}:x + y",
+  '\\" OR 1=1 --',
+];
 
 /** All real tags (`<...>`) in an HTML string. Escaped text can't contain `<`. */
 export function extractTags(html: string): string[] {

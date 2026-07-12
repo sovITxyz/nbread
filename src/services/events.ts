@@ -80,6 +80,59 @@ export function rowToEvent(row: EventRow): NostrEvent {
   };
 }
 
+/** Page size for the cross-tenant discover feed (P6). */
+export const DISCOVER_PAGE_SIZE = 20;
+
+/**
+ * Hard ceiling on discover pagination depth. Bounds the OFFSET a request can
+ * make D1 scan (free-tier rows_read budget); deep archive access stays
+ * per-blog (each blog lists its own posts and has feeds/sitemap).
+ */
+export const DISCOVER_MAX_PAGE = 50;
+
+/** An events row joined with the author's claimed handle (discover/search). */
+export type FeedRow = EventRow & { handle: string };
+
+/**
+ * Recent posts across ALL claimed, non-blocked users, newest first (P6
+ * discover feed).
+ *
+ * Scoping (P6 trap): the events table also holds posts mirrored for UNCLAIMED
+ * npubs and soft-deleted rows — the JOIN keeps only authors with a claimed
+ * handle (`handle IS NOT NULL`) who are not blocked, and `deleted = 0` drops
+ * tombstones. Ordering matches idx_events_feed and is fully deterministic:
+ * created_at DESC with id ASC as the tie-break.
+ *
+ * `limit`/`offset` are clamped here as well as at the route (no negatives,
+ * no unbounded offsets), so no caller can turn this into a table scan.
+ */
+export async function listRecentClaimedPosts(
+  env: Env,
+  limit: number = DISCOVER_PAGE_SIZE,
+  offset = 0,
+): Promise<FeedRow[]> {
+  const safeLimit = Math.min(
+    Math.max(1, Math.trunc(limit) || 1),
+    DISCOVER_PAGE_SIZE + 1, // +1 lets the route peek at "has next page"
+  );
+  const safeOffset = Math.min(
+    Math.max(0, Math.trunc(offset) || 0),
+    (DISCOVER_MAX_PAGE - 1) * DISCOVER_PAGE_SIZE,
+  );
+  const rs = await env.DB.prepare(
+    `SELECT e.*, u.handle AS handle
+     FROM events e
+     JOIN users u ON u.pubkey = e.pubkey
+     WHERE e.kind = 30023 AND e.deleted = 0
+       AND u.handle IS NOT NULL AND u.blocked = 0
+     ORDER BY e.created_at DESC, e.id ASC
+     LIMIT ?1 OFFSET ?2`,
+  )
+    .bind(safeLimit, safeOffset)
+    .all<FeedRow>();
+  return rs.results;
+}
+
 // D1 caps bound parameters per statement (~100); stay well under it.
 const ID_CHUNK = 50;
 
