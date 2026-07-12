@@ -26,3 +26,79 @@ body {
 a {
   color: var(--accent);
 }
+
+/* --- P6: landing polish + discover/search ----------------------------------- */
+.site-nav {
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+
+.tagline {
+  font-size: 1.15rem;
+}
+
+.landing-cta {
+  margin: 1.5rem 0;
+}
+
+.cta-button {
+  display: inline-block;
+  padding: 0.5rem 1.1rem;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.cta-secondary {
+  margin-left: 0.75rem;
+}
+
+.landing-pitch h2 {
+  margin-bottom: 0.25rem;
+}
+
+/* Scoped to the discover/search feed only (.feed-list): tenant blog pages
+   and the dashboard reuse the .post-* class names and must keep the exact
+   base styles P5 shipped with, or per-user theme CSS composes against
+   different foundations (review fix). */
+.feed-list {
+  list-style: none;
+  padding: 0;
+}
+
+.feed-list .post-item {
+  margin-bottom: 1.25rem;
+}
+
+.feed-list .post-summary {
+  margin: 0.25rem 0 0;
+  opacity: 0.85;
+}
+
+.feed-list .post-date,
+.feed-list .post-author {
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+.search-form input[type="search"] {
+  padding: 0.4rem 0.6rem;
+  width: 60%;
+  max-width: 20rem;
+}
+
+.pager {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+/* .empty is also a tenant-home class — style it only under the P6 pages'
+   own <main> wrappers (same review fix as .feed-list above). */
+.discover .empty,
+.search .empty,
+.search-hint {
+  opacity: 0.85;
+}

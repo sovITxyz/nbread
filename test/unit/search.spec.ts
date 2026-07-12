@@ -1,0 +1,77 @@
+// MATCH-input sanitizer (P6): user input must NEVER reach FTS5 MATCH raw.
+// toMatchQuery may only ever emit quoted alphanumeric phrases — every FTS5
+// operator (quotes, *, ^, -, parens, column filters, AND/OR/NOT/NEAR) must
+// come out inert or gone.
+import { describe, expect, it } from "vitest";
+import {
+  SEARCH_MAX_QUERY_CHARS,
+  SEARCH_MAX_TERMS,
+  toMatchQuery,
+} from "../../src/services/search";
+import { MATCH_INJECTION_CORPUS as INJECTION_CORPUS } from "../helpers";
+
+/**
+ * The only shape toMatchQuery is allowed to produce: nothing, or
+ * space-separated double-quoted runs of Unicode letters/digits. Anything
+ * else could carry FTS5 operator semantics.
+ */
+const SAFE_SHAPE = /^$|^"[\p{L}\p{N}]+"( "[\p{L}\p{N}]+")*$/u;
+
+describe("toMatchQuery (FTS5 MATCH sanitizer)", () => {
+  it("emits only quoted alphanumeric phrases for the whole corpus", () => {
+    for (const raw of INJECTION_CORPUS) {
+      const out = toMatchQuery(raw);
+      expect(out, `corpus input: ${JSON.stringify(raw)}`).toMatch(SAFE_SHAPE);
+    }
+  });
+
+  it("quotes plain terms (implicit AND)", () => {
+    expect(toMatchQuery("hello world")).toBe('"hello" "world"');
+  });
+
+  it("neutralizes bareword operators by quoting them as terms", () => {
+    expect(toMatchQuery("a OR b")).toBe('"a" "OR" "b"');
+    expect(toMatchQuery("cats NOT dogs")).toBe('"cats" "NOT" "dogs"');
+    expect(toMatchQuery("NEAR(a b)")).toBe('"NEAR" "a" "b"');
+  });
+
+  it("strips column filters, prefixes and grouping", () => {
+    expect(toMatchQuery("title:x")).toBe('"title" "x"');
+    expect(toMatchQuery("wild*")).toBe('"wild"');
+    expect(toMatchQuery("^anchored")).toBe('"anchored"');
+    expect(toMatchQuery("-negated")).toBe('"negated"');
+    expect(toMatchQuery("(grouped terms)")).toBe('"grouped" "terms"');
+  });
+
+  it("cannot be broken out of with embedded double quotes", () => {
+    expect(toMatchQuery('a"b')).toBe('"a" "b"');
+    expect(toMatchQuery('"phrase injection" OR x')).toBe(
+      '"phrase" "injection" "OR" "x"',
+    );
+  });
+
+  it("returns empty for input with nothing searchable", () => {
+    expect(toMatchQuery("")).toBe("");
+    expect(toMatchQuery('   "*^-():  ')).toBe("");
+    expect(toMatchQuery("\u0000\u2028")).toBe("");
+  });
+
+  it("keeps non-ASCII letters and digits", () => {
+    expect(toMatchQuery("héllo wörld")).toBe('"héllo" "wörld"');
+    expect(toMatchQuery("日本語 テスト")).toBe('"日本語" "テスト"');
+    expect(toMatchQuery("42 monkeys")).toBe('"42" "monkeys"');
+  });
+
+  it(`caps the term count at ${SEARCH_MAX_TERMS}`, () => {
+    const raw = Array.from({ length: 20 }, (_, i) => `term${i}`).join(" ");
+    const out = toMatchQuery(raw);
+    expect(out.split(" ")).toHaveLength(SEARCH_MAX_TERMS);
+    expect(out.endsWith(`"term${SEARCH_MAX_TERMS - 1}"`)).toBe(true);
+  });
+
+  it(`caps the raw query length at ${SEARCH_MAX_QUERY_CHARS} chars`, () => {
+    // One giant term: everything past the cap is cut before tokenizing.
+    const out = toMatchQuery("x".repeat(10_000));
+    expect(out).toBe(`"${"x".repeat(SEARCH_MAX_QUERY_CHARS)}"`);
+  });
+});

@@ -176,6 +176,23 @@ check_post "preview requires a session" 401 "$MAIN_HOST" "/dashboard/preview" '{
 check_post "settings require a session" 401 "$MAIN_HOST" "/dashboard/settings" '{}'
 check_post "settings enforce CSRF (cross-origin)" 403 "$MAIN_HOST" "/dashboard/settings" '{}' "https://evil.example"
 
+# --- P6: discover + search -------------------------------------------------------
+check "discover responds 200" 200 "$MAIN_HOST" "/discover"
+check_body_contains "discover page renders" "Discover"
+check_header_contains "discover sends a public s-maxage" "s-maxage"
+check "discover clamps garbage paging" 200 "$MAIN_HOST" "/discover?page=-999"
+# page=-999 clamps to page 1, which the first /discover check primed into the
+# Cache API — a real cache layer (review fix), not just an advisory header.
+check_header_contains "discover repeat serves from the Worker cache" "x-nostrbook-cache: hit"
+check "search form responds 200" 200 "$MAIN_HOST" "/search"
+check_body_contains "search page ships the form" 'name="q"'
+check "search with a query responds 200" 200 "$MAIN_HOST" "/search?q=hello"
+# FTS injection string: '"NEAR( title:x OR * -' — must be a 200, never a 5xx.
+check "search survives an FTS injection string" 200 "$MAIN_HOST" "/search?q=%22NEAR(%20title%3Ax%20OR%20*%20-"
+check "polished landing responds 200" 200 "$MAIN_HOST" "/"
+check_body_contains "landing carries the login CTA" 'href="/login"'
+check_body_contains "landing links to discover" 'href="/discover"'
+
 # --- P5 MANUAL check (documented, not automated): full write→render loop ---------
 # The end-to-end publish flow needs a REAL NIP-07 extension signing in a real
 # browser, which curl cannot drive. Once per release, verify by hand:
