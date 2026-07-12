@@ -26,6 +26,13 @@ export function BlogLayout(props: {
   handle: string;
   mainHost: string;
   profile: BlogProfile | null;
+  /**
+   * Dashboard-configured about blurb (users.settings.$.about). When non-empty
+   * it OVERRIDES the kind-0 profile's about, so the setting the owner types in
+   * the dashboard actually shows on their blog; otherwise the profile about
+   * (relay-sourced kind 0) is used. Both render through hono/jsx escaping.
+   */
+  about?: string | null;
   themeCss?: string;
   basePath?: string;
   children?: Child;
@@ -34,7 +41,8 @@ export function BlogLayout(props: {
   const css = sanitizeCss(props.themeCss ?? "");
   const name = props.profile?.name?.trim() || `@${props.handle}`;
   const picture = safeHttpUrl(props.profile?.picture);
-  const about = props.profile?.about?.trim() || null;
+  const about =
+    props.about?.trim() || props.profile?.about?.trim() || null;
 
   return (
     <html lang="en">

@@ -11,6 +11,7 @@ export function BlogHome(props: {
   handle: string;
   profile: BlogProfile | null;
   posts: NostrEvent[];
+  about?: string | null;
   themeCss?: string;
   mainHost: string;
   basePath?: string;
@@ -28,6 +29,7 @@ export function BlogHome(props: {
       handle={props.handle}
       mainHost={props.mainHost}
       profile={props.profile}
+      about={props.about}
       themeCss={props.themeCss ?? ""}
       basePath={base}
     >

@@ -3,6 +3,7 @@ import { finalizeEvent } from "nostr-tools/pure";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import keys from "./fixtures/keys.json";
 import type { NostrEvent } from "../src/nostr/event";
+import { createSession } from "../src/services/sessions";
 
 export const ALICE_PK = keys.alice.pk;
 export const BOB_PK = keys.bob.pk;
@@ -30,15 +31,16 @@ export async function seedBlockedMallory(): Promise<void> {
 }
 
 /**
- * Wipe all mirror state (events, posts_fts, profiles, gen counters).
- * Storage persists across `it` blocks within a test file, so specs that
- * assert exact counts/generations reset explicitly in beforeEach.
+ * Wipe all mirror state (events, posts_fts, profiles, delete horizons, gen
+ * counters). Storage persists across `it` blocks within a test file, so specs
+ * that assert exact counts/generations reset explicitly in beforeEach.
  */
 export async function resetMirrorState(): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM posts_fts"),
     env.DB.prepare("DELETE FROM events"),
     env.DB.prepare("DELETE FROM profiles"),
+    env.DB.prepare("DELETE FROM delete_horizons"),
   ]);
   await Promise.all(
     [ALICE_PK, BOB_PK, MALLORY_PK].map((pk) => env.KV.delete(`gen:${pk}`)),
@@ -117,6 +119,70 @@ export function postLogin(
     headers,
     body: typeof event === "string" ? event : JSON.stringify(event),
   });
+}
+
+/**
+ * Mint a real KV-backed session for a pubkey and return the Cookie header
+ * value. P5 dashboard/editor/API specs authenticate with this.
+ */
+export async function sessionCookieFor(pubkey: string): Promise<string> {
+  const token = await createSession(env, pubkey);
+  return `sid=${token}`;
+}
+
+/**
+ * Sign a kind 30023 long-form post with a committed fixture key
+ * (nostr-tools). Mirrors the tag shape public/js/editor.js produces:
+ * d + title + published_at (+ summary when given).
+ */
+export function signPostEvent(opts: {
+  sk?: string;
+  d: string;
+  title: string;
+  summary?: string;
+  content: string;
+  created_at: number;
+  published_at?: number;
+}): NostrEvent {
+  const tags: string[][] = [
+    ["d", opts.d],
+    ["title", opts.title],
+    ["published_at", String(opts.published_at ?? opts.created_at)],
+  ];
+  if (opts.summary !== undefined) tags.push(["summary", opts.summary]);
+  return finalizeEvent(
+    {
+      kind: 30023,
+      created_at: opts.created_at,
+      tags,
+      content: opts.content,
+    },
+    hexToBytes(opts.sk ?? ALICE_SK),
+  ) as NostrEvent;
+}
+
+/**
+ * Sign a kind 5 delete with a committed fixture key. Mirrors editor.js:
+ * e-tag the stored event id, a-tag the replaceable address.
+ */
+export function signDeleteEvent(opts: {
+  sk?: string;
+  eventId?: string;
+  address?: string;
+  created_at: number;
+}): NostrEvent {
+  const tags: string[][] = [];
+  if (opts.eventId !== undefined) tags.push(["e", opts.eventId]);
+  if (opts.address !== undefined) tags.push(["a", opts.address]);
+  return finalizeEvent(
+    {
+      kind: 5,
+      created_at: opts.created_at,
+      tags,
+      content: "Deleted via Nostrbook",
+    },
+    hexToBytes(opts.sk ?? ALICE_SK),
+  ) as NostrEvent;
 }
 
 /** All real tags (`<...>`) in an HTML string. Escaped text can't contain `<`. */

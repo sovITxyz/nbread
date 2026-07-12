@@ -7,6 +7,80 @@ export type User = {
   blocked: number; // 0 | 1
 };
 
+/**
+ * The dashboard-editable subset of users.settings. The blob also carries
+ * machine-managed keys (e.g. `$.sync.since`, the cron refresh watermark) that
+ * the dashboard must NEVER clobber — hence the json_set targeted update in
+ * updateBlogSettings below.
+ */
+export type BlogSettings = {
+  /** Per-blog theme CSS — sanitized at WRITE time (P2 addendum) AND again at render. */
+  css: string;
+  /** Free-text about blurb. */
+  about: string;
+  /** The user's preferred relays (wss:// URLs) for editor-side broadcast + sync. */
+  relays: string[];
+};
+
+/** Parse the dashboard-facing settings out of a users.settings JSON blob. */
+export function readBlogSettings(settingsJson: string): BlogSettings {
+  const out: BlogSettings = { css: "", about: "", relays: [] };
+  try {
+    const parsed: unknown = JSON.parse(settingsJson);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const o = parsed as Record<string, unknown>;
+      if (typeof o.css === "string") out.css = o.css;
+      if (typeof o.about === "string") out.about = o.about;
+      if (Array.isArray(o.relays)) {
+        out.relays = o.relays.filter((r): r is string => typeof r === "string");
+      }
+    }
+  } catch {
+    // malformed settings blob → defaults
+  }
+  return out;
+}
+
+/**
+ * Persist the dashboard settings for a pubkey.
+ *
+ * json_set touches ONLY $.css / $.about / $.relays inside the stored blob, so
+ * concurrent machine-managed writes (the cron refresh watermark at
+ * $.sync.since — see the P3 finding on read-modify-write clobbering) are
+ * never lost to a whole-column overwrite. Malformed / non-object blobs are
+ * rebuilt from '{}' (same normalization as cron/refresh writeSince).
+ *
+ * The user row may not exist yet (a signed-in key that never claimed a
+ * handle); the INSERT creates it with a NULL handle, which claimHandle later
+ * upgrades via its ON CONFLICT(pubkey) path.
+ */
+export async function updateBlogSettings(
+  env: Env,
+  pubkey: string,
+  settings: BlogSettings,
+): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO users (pubkey, claimed_at) VALUES (?1, ?2)
+       ON CONFLICT(pubkey) DO NOTHING`,
+    ).bind(pubkey, new Date().toISOString()),
+    env.DB.prepare(
+      `UPDATE users SET settings = json_set(
+         CASE WHEN json_valid(settings) AND json_type(settings) = 'object'
+              THEN settings ELSE '{}' END,
+         '$.css', ?1,
+         '$.about', ?2,
+         '$.relays', json(?3)
+       ) WHERE pubkey = ?4`,
+    ).bind(
+      settings.css,
+      settings.about,
+      JSON.stringify(settings.relays),
+      pubkey,
+    ),
+  ]);
+}
+
 /** Look up a user by handle (case-insensitive via COLLATE NOCASE). */
 export async function getUserByHandle(
   env: Env,

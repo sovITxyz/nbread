@@ -1,11 +1,20 @@
 import { Layout } from "../layout";
+import type { BlogSettings } from "../../services/users";
+
+/** One row of the dashboard post list. */
+export type DashboardPost = {
+  slug: string;
+  title: string;
+  date: string; // YYYY-MM-DD
+};
 
 /**
- * Minimal authed dashboard shell (P4): shows the signed-in npub and either
- * the claimed handle or the claim form (with Turnstile). Post list, settings
- * and the editor arrive in P5.
+ * Authed dashboard: the signed-in npub, handle claim (until claimed), the
+ * user's own mirrored posts with edit links, a "new post" button, blog
+ * settings (theme CSS / about / relays), and logout.
  *
- * All dynamic strings render through hono/jsx auto-escaping.
+ * All dynamic strings render through hono/jsx auto-escaping; edit links
+ * additionally encodeURIComponent the slug (d-tags are arbitrary strings).
  */
 export function DashboardPage(props: {
   npub: string;
@@ -13,6 +22,9 @@ export function DashboardPage(props: {
   mainHost: string;
   turnstileSiteKey: string;
   error: string | null;
+  saved: boolean;
+  posts: DashboardPost[];
+  settings: BlogSettings;
 }) {
   return (
     <Layout title="Dashboard — Nostrbook">
@@ -25,6 +37,11 @@ export function DashboardPage(props: {
         {props.error ? (
           <p class="claim-error" role="alert">
             {props.error}
+          </p>
+        ) : null}
+        {props.saved ? (
+          <p class="settings-saved" role="status">
+            Settings saved.
           </p>
         ) : null}
 
@@ -79,6 +96,101 @@ export function DashboardPage(props: {
             ></script>
           </section>
         )}
+
+        <section class="dashboard-posts">
+          <h2>Your posts</h2>
+          <p>
+            <a class="new-post-button" href="/dashboard/posts/new">
+              New post
+            </a>
+          </p>
+          {props.posts.length === 0 ? (
+            <p class="posts-empty">
+              No posts yet — write your first one, or wait for the next relay
+              sync to mirror what you have published elsewhere.
+            </p>
+          ) : (
+            <ul class="post-list">
+              {props.posts.map((post) => (
+                <li>
+                  <span class="post-title">{post.title}</span>{" "}
+                  <time>{post.date}</time>{" "}
+                  {post.slug !== "" ? (
+                    <a
+                      class="post-edit-link"
+                      href={`/dashboard/editor?slug=${encodeURIComponent(post.slug)}`}
+                    >
+                      Edit
+                    </a>
+                  ) : (
+                    <span class="post-no-slug">(no slug — not editable)</span>
+                  )}{" "}
+                  {props.handle && post.slug !== "" ? (
+                    <a
+                      href={`https://${props.handle}.${props.mainHost}/${encodeURIComponent(post.slug)}`}
+                    >
+                      View
+                    </a>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section class="dashboard-settings">
+          <h2>Blog settings</h2>
+          <form method="post" action="/dashboard/settings">
+            <p>
+              <label>
+                About
+                <br />
+                <textarea
+                  name="about"
+                  rows={3}
+                  cols={60}
+                  maxlength={1000}
+                  placeholder="A short blurb about your blog"
+                >
+                  {props.settings.about}
+                </textarea>
+              </label>
+            </p>
+            <p>
+              <label>
+                Theme CSS
+                <br />
+                {/* Protective leading "\n" (the HTML parser eats one) so CSS
+                    that begins with a newline survives the edit round-trip. */}
+                <textarea
+                  name="css"
+                  rows={8}
+                  cols={60}
+                  spellcheck={false}
+                  placeholder={"body { background: #fffdf5; }"}
+                >
+                  {"\n" + props.settings.css}
+                </textarea>
+              </label>
+            </p>
+            <p>
+              <label>
+                Relays (wss:// URLs, one per line)
+                <br />
+                <textarea
+                  name="relays"
+                  rows={3}
+                  cols={60}
+                  spellcheck={false}
+                  placeholder={"wss://relay.damus.io\nwss://nos.lol"}
+                >
+                  {props.settings.relays.join("\n")}
+                </textarea>
+              </label>
+            </p>
+            <button type="submit">Save settings</button>
+          </form>
+        </section>
 
         <form method="post" action="/logout" class="logout-form">
           <button type="submit">Sign out</button>

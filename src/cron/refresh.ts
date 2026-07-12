@@ -15,7 +15,7 @@
  *     events — `until`-paging walks backward until a non-full page proves
  *     the window is complete.
  */
-import type { User } from "../services/users";
+import { readBlogSettings, type User } from "../services/users";
 import { fetchEvents } from "../nostr/relay";
 import { bumpGen, mirrorEvent } from "../services/mirror";
 import { storedEventIds } from "../services/events";
@@ -158,9 +158,15 @@ async function collectBacklog(
  */
 async function refreshUser(
   env: Env,
-  relays: string[],
+  baseRelays: string[],
   user: User,
 ): Promise<void> {
+  // Sync from the user's configured relays too — settings.relays is documented
+  // as "editor-side broadcast + sync", and a user whose posts live only on
+  // their own relays would otherwise never be mirrored by cron. Merge their
+  // list ahead of the service defaults (deduped).
+  const configured = readBlogSettings(user.settings).relays;
+  const relays = [...new Set([...configured, ...baseRelays])];
   const since = readSince(user.settings);
   const { events: collected, windowClosed } = await collectBacklog(
     relays,

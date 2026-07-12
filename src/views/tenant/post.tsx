@@ -15,6 +15,7 @@ export function PostPage(props: {
   profile: BlogProfile | null;
   event: NostrEvent;
   bodyHtml: string;
+  about?: string | null;
   themeCss?: string;
   mainHost: string;
   basePath?: string;
@@ -28,6 +29,7 @@ export function PostPage(props: {
       handle={props.handle}
       mainHost={props.mainHost}
       profile={props.profile}
+      about={props.about}
       themeCss={props.themeCss ?? ""}
       basePath={props.basePath ?? ""}
     >
