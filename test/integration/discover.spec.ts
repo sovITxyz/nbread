@@ -10,12 +10,19 @@ import { mirrorEvent } from "../../src/services/mirror";
 import {
   DISCOVER_MAX_PAGE,
   DISCOVER_PAGE_SIZE,
+  FEED_CONTENT_PREFIX_CHARS,
   listRecentClaimedPosts,
 } from "../../src/services/events";
+import {
+  DISCOVER_RATE_MAX,
+  DISCOVER_RATE_WINDOW_SECONDS,
+} from "../../src/routes/main";
+import { CACHE_STATUS_HEADER } from "../../src/middleware/cache";
 import {
   ALICE_PK,
   MALLORY_SK,
   findXssVectors,
+  resetDiscoverCache,
   resetMirrorState,
   resetRateLimits,
   resetUsers,
@@ -115,6 +122,7 @@ describe("discover feed (P6)", () => {
     await resetMirrorState();
     await resetUsers();
     await resetRateLimits();
+    await resetDiscoverCache();
     await seedAlice();
     await seedBob();
     await seedBlockedMallory();
@@ -163,6 +171,84 @@ describe("discover feed (P6)", () => {
   it("sends a short public s-maxage cache header (no KV involved)", async () => {
     const res = await getDiscover();
     expect(res.headers.get("Cache-Control")).toBe("public, s-maxage=300");
+  });
+
+  describe("Cache API + per-IP rate limit (review fix)", () => {
+    // Premise of the fix: a Worker-generated response is NEVER edge-cached
+    // by s-maxage alone — /discover must do its own caches.default put and
+    // back it with a per-IP limit or every request runs the D1 feed query.
+
+    it("serves repeats from the Cache API: miss, then hit, cache-buster immune", async () => {
+      const first = await getDiscover();
+      expect(first.status).toBe(200);
+      expect(first.headers.get(CACHE_STATUS_HEADER)).toBe("miss");
+      const firstBody = await first.text();
+
+      const second = await getDiscover();
+      expect(second.status).toBe(200);
+      expect(second.headers.get(CACHE_STATUS_HEADER)).toBe("hit");
+      // Hits keep the shared-cache header and byte-identical content.
+      expect(second.headers.get("Cache-Control")).toBe(
+        "public, s-maxage=300",
+      );
+      expect(await second.text()).toBe(firstBody);
+
+      // The key is built from the CLAMPED page only: cache-buster params and
+      // garbage pages that clamp to 1 cannot force a fresh D1 query.
+      const busted = await getDiscover("/discover?page=1&cb=12345");
+      expect(busted.headers.get(CACHE_STATUS_HEADER)).toBe("hit");
+      const clamped = await getDiscover("/discover?page=abc&x=y");
+      expect(clamped.headers.get(CACHE_STATUS_HEADER)).toBe("hit");
+    });
+
+    it("rate limits cache MISSES per IP with a 429 page (never 5xx); hits stay free", async () => {
+      const ip = "203.0.113.99";
+      // Exhaust the IP's current fixed window directly in D1. Retry once in
+      // case the window flips mid-test (same pattern as the search spec).
+      for (let attempt = 0; attempt < 2; attempt++) {
+        // Fresh cache per attempt (a flipped-window attempt would otherwise
+        // find page 2 already cached and read a hit instead of a 429).
+        await resetDiscoverCache();
+        // Prime page 1 into the cache (another client's budget).
+        expect((await getDiscover()).status).toBe(200);
+        const now = Math.floor(Date.now() / 1000);
+        const windowStart = now - (now % DISCOVER_RATE_WINDOW_SECONDS);
+        await env.DB.prepare(
+          `INSERT INTO rate_limits (key, count, window_start) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET count = excluded.count,
+             window_start = excluded.window_start`,
+        )
+          .bind(`discover:ip:${ip}`, DISCOVER_RATE_MAX, windowStart)
+          .run();
+
+        // A cache HIT never touches the limiter — still 200 for this IP.
+        const hit = await SELF.fetch("https://nostrbook.net/discover", {
+          headers: { "CF-Connecting-IP": ip },
+        });
+        expect(hit.status).toBe(200);
+        expect(hit.headers.get(CACHE_STATUS_HEADER)).toBe("hit");
+
+        // An uncached page (miss) is denied with a friendly 429 page.
+        const denied = await SELF.fetch(
+          "https://nostrbook.net/discover?page=2",
+          { headers: { "CF-Connecting-IP": ip } },
+        );
+        if (denied.status === 200 && attempt === 0) continue; // window flipped
+        expect(denied.status).toBe(429);
+        const html = await denied.text();
+        expect(html).toContain("Too many requests");
+        expect(findXssVectors(html, "page")).toEqual([]);
+        // The 429 was NOT cached: another client misses page 2 fresh (200).
+        const other = await SELF.fetch(
+          "https://nostrbook.net/discover?page=2",
+          { headers: { "CF-Connecting-IP": "203.0.113.98" } },
+        );
+        expect(other.status).toBe(200);
+        expect(other.headers.get(CACHE_STATUS_HEADER)).toBe("miss");
+        return;
+      }
+      throw new Error("rate limit never engaged (window flipped twice?)");
+    });
   });
 
   it("breaks created_at ties deterministically by id ASC", async () => {
@@ -256,6 +342,9 @@ describe("discover feed (P6)", () => {
       expect(await mirrorEvent(env, deleteHello, { bumpGen: false })).toBe(
         "stored",
       );
+      // The first fetch cached page 1; purge so the refetch reflects the
+      // delete NOW instead of after the 300s TTL (accepted product behavior).
+      await resetDiscoverCache();
       html = await (await getDiscover()).text();
       expect(html).not.toContain(
         'href="https://alice.nostrbook.net/hello-world"',
@@ -314,6 +403,17 @@ describe("discover feed (P6)", () => {
       expect(deepHtml).toContain(`/discover?page=${DISCOVER_MAX_PAGE - 1}`);
     });
 
+    it("service-level: feed rows are a slim projection (no raw/rendered/sig/content tail)", async () => {
+      // Review fix: SELECT e.* hauled up to ~100KiB per row (content +
+      // rendered + raw) through D1 on the PUBLIC path; the feed only renders
+      // tag metadata plus a bounded content prefix for the title fallback.
+      const rows = await listRecentClaimedPosts(env);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const heavy of ["raw", "rendered", "sig", "deleted"]) {
+        expect(rows[0], heavy).not.toHaveProperty(heavy);
+      }
+    });
+
     it("service-level: limit/offset are clamped, ordering fully specified", async () => {
       // Negative/garbage limits and offsets cannot go unbounded.
       const rows = await listRecentClaimedPosts(env, -5, -100);
@@ -324,6 +424,28 @@ describe("discover feed (P6)", () => {
         (a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : 1),
       );
       expect(all.map((r) => r.id)).toEqual(sorted.map((r) => r.id));
+    });
+  });
+
+  describe("slim projection: content prefix (review fix)", () => {
+    it("truncates content to the title-fallback prefix; headings within it still title the item", async () => {
+      // A TITLE-LESS post: the feed title must come from the first heading
+      // inside the bounded content prefix — the one reason content is
+      // fetched at all.
+      const id = "9".repeat(4) + "a".repeat(60);
+      const longBody = `# Heading from content\n\n${"x".repeat(FEED_CONTENT_PREFIX_CHARS * 2)}`;
+      await env.DB.prepare(
+        `INSERT INTO events (id, pubkey, kind, d_tag, created_at, content, tags, sig, raw, deleted, rendered)
+         VALUES (?, ?, 30023, 'titleless', 1700009900, ?, '[["d","titleless"]]', 'rawsig', '{}', 0, '<p>x</p>')`,
+      )
+        .bind(id, ALICE_PK, longBody)
+        .run();
+      const rows = await listRecentClaimedPosts(env);
+      const row = rows.find((r) => r.id === id);
+      expect(row).toBeDefined();
+      expect(row!.content.length).toBe(FEED_CONTENT_PREFIX_CHARS);
+      const html = await (await getDiscover()).text();
+      expect(html).toContain("Heading from content");
     });
   });
 });

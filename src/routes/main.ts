@@ -28,7 +28,7 @@ import { DiscoverPage } from "../views/main/discover";
 import { SearchPage } from "../views/main/search";
 import { getProfile as getProfileRow } from "../services/profiles";
 import { relayList } from "../cron/refresh";
-import { defaultCache } from "../middleware/cache";
+import { CACHE_STATUS_HEADER, defaultCache } from "../middleware/cache";
 import type { BlogProfile } from "../views/tenant/layout";
 import { BlogHome } from "../views/tenant/home";
 import { PostPage } from "../views/tenant/post";
@@ -48,12 +48,33 @@ mainRoutes.get("/healthz", (c) =>
 // Serves STORED data only (titles/summaries from tag strings, escaped text —
 // never renderPost) to stay inside the 10ms public-path CPU budget. The
 // per-tenant gen cache (middleware/cache.ts) keys on ONE pubkey's generation
-// and cannot represent a cross-tenant page, so discover is not edge-cached
-// through it; a short public s-maxage bounds origin hits instead. No KV
-// reads or writes on this path.
+// and cannot represent a cross-tenant page, so discover gets its OWN two
+// protections (review fix — a Worker-GENERATED response is never stored in
+// Cloudflare's edge cache just because it carries s-maxage; without an
+// explicit Cache API put, EVERY request would run the D1 feed query, and
+// page=50 costs ~1,000 rows_read against the free-tier daily budget):
+//   1. a per-colo Cache API entry keyed on the CLAMPED page number alone
+//      (bounded at DISCOVER_MAX_PAGE keys, immune to cache-buster params);
+//   2. a per-IP rate limit (D1 rate_limits, zero KV writes) as the
+//      cross-colo backstop — only cache MISSES spend it.
+// No KV reads or writes on this path.
 
-/** Edge/browser cache hint for the discover feed (seconds). */
+/** Cache API / shared-proxy TTL for the discover feed (seconds). */
 export const DISCOVER_CACHE_SECONDS = 300;
+
+/** Max cache-missing /discover requests per IP per window. */
+export const DISCOVER_RATE_MAX = 60;
+/** Discover rate-limit window (seconds). */
+export const DISCOVER_RATE_WINDOW_SECONDS = 60;
+
+/**
+ * Cache API key for one discover page. Built from the CLAMPED page number —
+ * never from the raw query string — so `?page=50&cb=<random>` cannot bust
+ * the cache. Exported so tests can purge entries between mutations.
+ */
+export function discoverCacheKey(page: number): Request {
+  return new Request(`https://cache.internal/discover?page=${page}`);
+}
 
 /**
  * Clamp a raw ?page= value to [1, DISCOVER_MAX_PAGE]. Garbage, negatives,
@@ -69,6 +90,45 @@ export function clampPage(raw: string | undefined): number {
 
 mainRoutes.get("/discover", async (c) => {
   const page = clampPage(c.req.query("page"));
+  const mainHost = c.env.MAIN_HOST.toLowerCase();
+
+  // (1) Per-colo Cache API layer — checked BEFORE the rate limit so cached
+  // pages cost zero D1 (reads or rate-counter writes).
+  const key = discoverCacheKey(page);
+  try {
+    const hit = await defaultCache().match(key);
+    if (hit) {
+      const res = new Response(hit.body, hit);
+      res.headers.set(CACHE_STATUS_HEADER, "hit");
+      return res;
+    }
+  } catch {
+    // Cache API unavailable — fall through and serve uncached.
+  }
+
+  // (2) Cross-colo backstop: per-IP fixed window in D1 (~1 row touched),
+  // same pattern as /search below. Only cache misses reach the (far
+  // heavier) feed query. Fails closed like every abuse cap in this file.
+  const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+  const allowed = await rateLimitAllows(
+    c.env,
+    `discover:ip:${ip}`,
+    DISCOVER_RATE_MAX,
+    DISCOVER_RATE_WINDOW_SECONDS,
+  );
+  if (!allowed) {
+    return c.html(
+      DiscoverPage({
+        items: [],
+        page,
+        hasNext: false,
+        mainHost,
+        error: "Too many requests — please wait a minute and try again.",
+      }),
+      429,
+    );
+  }
+
   const offset = (page - 1) * DISCOVER_PAGE_SIZE;
   // Fetch one extra row to detect whether an older page exists.
   const rows = await listRecentClaimedPosts(
@@ -77,9 +137,7 @@ mainRoutes.get("/discover", async (c) => {
     offset,
   );
   const hasNext = rows.length > DISCOVER_PAGE_SIZE && page < DISCOVER_MAX_PAGE;
-  const mainHost = c.env.MAIN_HOST.toLowerCase();
-  c.header("Cache-Control", `public, s-maxage=${DISCOVER_CACHE_SECONDS}`);
-  return c.html(
+  const res = await c.html(
     DiscoverPage({
       items: feedItems(rows.slice(0, DISCOVER_PAGE_SIZE), mainHost),
       page,
@@ -87,6 +145,15 @@ mainRoutes.get("/discover", async (c) => {
       mainHost,
     }),
   );
+  res.headers.set("Cache-Control", `public, s-maxage=${DISCOVER_CACHE_SECONDS}`);
+  res.headers.set(CACHE_STATUS_HEADER, "miss");
+  try {
+    // Only 200s are cached; the 429 above never enters the cache.
+    await defaultCache().put(key, res.clone());
+  } catch {
+    // Cache write failed — the response still goes out uncached.
+  }
+  return res;
 });
 
 // --- nostrbook.net/search — FTS5 search over mirrored posts (P6) --------------
@@ -126,6 +193,20 @@ mainRoutes.get("/search", async (c) => {
     );
   }
   const rows = await searchPosts(c.env, query);
+  if (rows === null) {
+    // Backend fault (never hostile input — the sanitizer's output is proven
+    // valid MATCH). A 503 keeps outages visible in monitoring instead of
+    // disguising them as "No posts matched" (review fix).
+    return c.html(
+      SearchPage({
+        query,
+        results: null,
+        mainHost,
+        error: "Search is temporarily unavailable — please try again shortly.",
+      }),
+      503,
+    );
+  }
   return c.html(
     SearchPage({ query, results: feedItems(rows, mainHost), mainHost }),
   );

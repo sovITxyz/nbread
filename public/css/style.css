@@ -59,22 +59,26 @@ a {
   margin-bottom: 0.25rem;
 }
 
-.post-list {
+/* Scoped to the discover/search feed only (.feed-list): tenant blog pages
+   and the dashboard reuse the .post-* class names and must keep the exact
+   base styles P5 shipped with, or per-user theme CSS composes against
+   different foundations (review fix). */
+.feed-list {
   list-style: none;
   padding: 0;
 }
 
-.post-item {
+.feed-list .post-item {
   margin-bottom: 1.25rem;
 }
 
-.post-summary {
+.feed-list .post-summary {
   margin: 0.25rem 0 0;
   opacity: 0.85;
 }
 
-.post-date,
-.post-author {
+.feed-list .post-date,
+.feed-list .post-author {
   font-size: 0.85rem;
   opacity: 0.75;
 }
@@ -91,7 +95,10 @@ a {
   margin-top: 1.5rem;
 }
 
-.empty,
+/* .empty is also a tenant-home class — style it only under the P6 pages'
+   own <main> wrappers (same review fix as .feed-list above). */
+.discover .empty,
+.search .empty,
 .search-hint {
   opacity: 0.85;
 }

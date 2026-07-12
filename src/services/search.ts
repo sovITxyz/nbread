@@ -1,5 +1,6 @@
 import {
   DISCOVER_PAGE_SIZE,
+  FEED_SELECT_COLUMNS,
   type FeedRow,
 } from "./events";
 
@@ -55,14 +56,17 @@ export function toMatchQuery(raw: string): string {
  * filtered feed, and recency ordering keeps pagination/snapshots stable).
  *
  * Never throws on hostile input: the sanitizer guarantees an operator-free
- * MATCH expression, and any residual D1/FTS error degrades to an empty
- * result set instead of a 500 on this public path.
+ * MATCH expression. A REAL backend failure (D1 outage, schema drift, a
+ * future sanitizer regression) returns `null` — a state DISTINCT from "no
+ * results" — so the route can render a "temporarily unavailable" page and
+ * outages stay visible in monitoring instead of masquerading as empty
+ * result sets (review fix).
  */
 export async function searchPosts(
   env: Env,
   query: string,
   limit: number = SEARCH_RESULT_LIMIT,
-): Promise<FeedRow[]> {
+): Promise<FeedRow[] | null> {
   const match = toMatchQuery(query);
   if (match === "") return [];
   const safeLimit = Math.min(
@@ -71,7 +75,7 @@ export async function searchPosts(
   );
   try {
     const rs = await env.DB.prepare(
-      `SELECT e.*, u.handle AS handle
+      `SELECT ${FEED_SELECT_COLUMNS}
        FROM posts_fts
        JOIN events e ON e.rowid = posts_fts.rowid
        JOIN users u ON u.pubkey = e.pubkey
@@ -85,9 +89,14 @@ export async function searchPosts(
       .all<FeedRow>();
     return rs.results;
   } catch (err) {
-    // Defense-in-depth only — the sanitizer shape is unit-tested to be a
-    // valid FTS5 expression. A real D1 outage degrades to "no results".
-    console.error("search query failed:", err);
-    return [];
+    // The sanitizer's output shape is unit-tested to be a valid FTS5
+    // expression, so this can only fire on a genuine backend fault. Log
+    // with the sanitized expression for diagnosis and surface the DISTINCT
+    // degraded state to the caller (never a throw on this public path).
+    console.error(
+      `search query failed (match=${JSON.stringify(match)}):`,
+      err,
+    );
+    return null;
   }
 }

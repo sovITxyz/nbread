@@ -55,6 +55,16 @@ function searchPageXssVectors(html: string): string[] {
   );
 }
 
+/**
+ * searchPosts asserting the backend did not degrade (`null` means a real
+ * D1/FTS failure since the review fix — see the "degraded backend" block).
+ */
+async function searchRows(q: string) {
+  const rows = await searchPosts(env, q);
+  expect(rows).not.toBeNull();
+  return rows!;
+}
+
 let rawSeq = 0;
 
 /** Direct events + posts_fts insert (see discover.spec.ts for rationale). */
@@ -161,24 +171,24 @@ describe("search (P6)", () => {
 
   describe("canned queries over fixtures", () => {
     it('"torture" matches both torture-titled posts (set assertion)', async () => {
-      const rows = await searchPosts(env, "torture");
+      const rows = await searchRows("torture");
       expect(new Set(rows.map((r) => r.id))).toEqual(
         new Set([aliceTorture.id, aliceXss.id]),
       );
     });
 
     it('"markdown feature" ANDs terms across title and summary', async () => {
-      const rows = await searchPosts(env, "markdown feature");
+      const rows = await searchRows("markdown feature");
       expect(rows.map((r) => r.id)).toEqual([aliceTorture.id]);
     });
 
     it("porter stemming: 'authors' matches bob's 'author' summary", async () => {
-      const rows = await searchPosts(env, "authors");
+      const rows = await searchRows("authors");
       expect(rows.map((r) => r.id)).toEqual([bobFirst.id]);
     });
 
     it("results carry the author handle for URL building", async () => {
-      const rows = await searchPosts(env, "hello");
+      const rows = await searchRows("hello");
       expect(rows.map((r) => [r.id, r.handle])).toEqual([
         [aliceHello.id, "alice"],
       ]);
@@ -211,7 +221,7 @@ describe("search (P6)", () => {
       }
       const [firstTie, secondTie] =
         tieA.id < tieB.id ? [tieA.id, tieB.id] : [tieB.id, tieA.id];
-      const rows = await searchPosts(env, "zebraword");
+      const rows = await searchRows("zebraword");
       expect(rows.map((r) => r.id)).toEqual([firstTie, secondTie, older.id]);
     });
   });
@@ -365,6 +375,41 @@ describe("search (P6)", () => {
         .bind(`search:ip:${ip}`)
         .first<{ count: number }>();
       expect(row).toBeNull();
+    });
+  });
+
+  describe("degraded backend (review fix)", () => {
+    // A REAL D1/FTS failure must be distinguishable from "no results": the
+    // service returns null (not []) and the route says so with a 503 —
+    // outages stay visible in monitoring instead of reading as empty pages.
+
+    it("searchPosts returns null — NOT [] — when the query itself fails", async () => {
+      const broken = {
+        DB: {
+          prepare() {
+            throw new Error("D1 down (test)");
+          },
+        },
+      } as unknown as Env;
+      expect(await searchPosts(broken, "hello")).toBeNull();
+    });
+
+    it("route renders a 503 'temporarily unavailable' page on backend failure", async () => {
+      // Simulate schema drift / outage by dropping the FTS table; restore in
+      // finally so later tests (and this file's beforeEach) see the schema.
+      await env.DB.prepare("DROP TABLE posts_fts").run();
+      try {
+        const res = await getSearch("hello");
+        expect(res.status).toBe(503);
+        const html = await res.text();
+        expect(html).toContain("temporarily unavailable");
+        expect(html).not.toContain("No posts matched");
+        expect(searchPageXssVectors(html)).toEqual([]);
+      } finally {
+        await env.DB.prepare(
+          "CREATE VIRTUAL TABLE posts_fts USING fts5(title, summary, content, tokenize='porter unicode61')",
+        ).run();
+      }
     });
   });
 });

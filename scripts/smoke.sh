@@ -181,6 +181,9 @@ check "discover responds 200" 200 "$MAIN_HOST" "/discover"
 check_body_contains "discover page renders" "Discover"
 check_header_contains "discover sends a public s-maxage" "s-maxage"
 check "discover clamps garbage paging" 200 "$MAIN_HOST" "/discover?page=-999"
+# page=-999 clamps to page 1, which the first /discover check primed into the
+# Cache API — a real cache layer (review fix), not just an advisory header.
+check_header_contains "discover repeat serves from the Worker cache" "x-nostrbook-cache: hit"
 check "search form responds 200" 200 "$MAIN_HOST" "/search"
 check_body_contains "search page ships the form" 'name="q"'
 check "search with a query responds 200" 200 "$MAIN_HOST" "/search?q=hello"

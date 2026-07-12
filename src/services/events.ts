@@ -51,12 +51,23 @@ export async function getPost(
 }
 
 /**
+ * The subset of EventRow that rowToEvent actually reads. Full EventRow rows
+ * satisfy it; so do the slim FeedRow projections (which omit `sig` — feeds
+ * never render or verify signatures).
+ */
+type EventRowCore = Pick<
+  EventRow,
+  "id" | "pubkey" | "kind" | "created_at" | "content" | "tags"
+> &
+  Partial<Pick<EventRow, "sig">>;
+
+/**
  * Parse an events row back into a NostrEvent. The tags column was written by
  * mirrorEvent from a verified event, but parse defensively anyway: a
  * malformed blob degrades to `tags: []` instead of throwing on the render
  * path.
  */
-export function rowToEvent(row: EventRow): NostrEvent {
+export function rowToEvent(row: EventRowCore): NostrEvent {
   let tags: string[][] = [];
   try {
     const parsed: unknown = JSON.parse(row.tags);
@@ -76,7 +87,7 @@ export function rowToEvent(row: EventRow): NostrEvent {
     created_at: row.created_at,
     tags,
     content: row.content,
-    sig: row.sig,
+    sig: row.sig ?? "",
   };
 }
 
@@ -90,8 +101,37 @@ export const DISCOVER_PAGE_SIZE = 20;
  */
 export const DISCOVER_MAX_PAGE = 50;
 
-/** An events row joined with the author's claimed handle (discover/search). */
-export type FeedRow = EventRow & { handle: string };
+/**
+ * Chars of `content` fetched for feed rows — enough for postMeta's
+ * first-heading title fallback without hauling the full 32KiB
+ * content/rendered/raw columns through D1 per row on the PUBLIC
+ * discover/search paths (review fix: 10ms CPU budget; a title-less 32KiB
+ * post must not cost a 32KiB regex scan × 20 rows per request). A post
+ * whose first heading sits beyond this prefix degrades to "Untitled".
+ */
+export const FEED_CONTENT_PREFIX_CHARS = 2048;
+
+/**
+ * Slim SELECT list shared by the discover feed and search results (aliases:
+ * events e, users u). Deliberately NOT `e.*`: the feed renders only
+ * tag-derived metadata, so content is truncated to the title-fallback prefix
+ * and the heavyweight columns (rendered, raw, sig, full content) never leave
+ * D1.
+ */
+export const FEED_SELECT_COLUMNS =
+  "e.id, e.pubkey, e.kind, e.d_tag, e.created_at, e.tags, " +
+  `substr(e.content, 1, ${FEED_CONTENT_PREFIX_CHARS}) AS content, ` +
+  "u.handle AS handle";
+
+/**
+ * A slim feed row: the events columns the discover/search pages actually
+ * render (content truncated to FEED_CONTENT_PREFIX_CHARS) plus the author's
+ * claimed handle.
+ */
+export type FeedRow = Pick<
+  EventRow,
+  "id" | "pubkey" | "kind" | "d_tag" | "created_at" | "content" | "tags"
+> & { handle: string };
 
 /**
  * Recent posts across ALL claimed, non-blocked users, newest first (P6
@@ -120,7 +160,7 @@ export async function listRecentClaimedPosts(
     (DISCOVER_MAX_PAGE - 1) * DISCOVER_PAGE_SIZE,
   );
   const rs = await env.DB.prepare(
-    `SELECT e.*, u.handle AS handle
+    `SELECT ${FEED_SELECT_COLUMNS}
      FROM events e
      JOIN users u ON u.pubkey = e.pubkey
      WHERE e.kind = 30023 AND e.deleted = 0

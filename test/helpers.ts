@@ -4,6 +4,9 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 import keys from "./fixtures/keys.json";
 import type { NostrEvent } from "../src/nostr/event";
 import { createSession } from "../src/services/sessions";
+import { defaultCache } from "../src/middleware/cache";
+import { discoverCacheKey } from "../src/routes/main";
+import { DISCOVER_MAX_PAGE } from "../src/services/events";
 
 export const ALICE_PK = keys.alice.pk;
 export const BOB_PK = keys.bob.pk;
@@ -68,6 +71,21 @@ export async function resetRateLimits(): Promise<void> {
 /** Wipe all users (claim specs need a clean slate per test). */
 export async function resetUsers(): Promise<void> {
   await env.DB.prepare("DELETE FROM users").run();
+}
+
+/**
+ * Purge every possible discover-feed Cache API entry (pages
+ * 1..DISCOVER_MAX_PAGE). The Cache API persists across `it` blocks within a
+ * file, so specs that mutate posts and re-fetch /discover must purge or
+ * they read the previous test's page (review fix: /discover is now cached
+ * through caches.default, not just an advisory s-maxage header).
+ */
+export async function resetDiscoverCache(): Promise<void> {
+  await Promise.all(
+    Array.from({ length: DISCOVER_MAX_PAGE }, (_, i) =>
+      defaultCache().delete(discoverCacheKey(i + 1)),
+    ),
+  );
 }
 
 /**
