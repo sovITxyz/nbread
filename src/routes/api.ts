@@ -1,9 +1,89 @@
 import { Hono } from "hono";
 import type { DispatchEnv } from "../types";
+import { isNostrEvent } from "../nostr/event";
+import { mirrorEvent } from "../services/mirror";
+import { rateLimitAllows } from "../services/ratelimit";
 
-/** JSON API (apex only). The mirror endpoint arrives in P5. */
+/**
+ * JSON API (apex only). CSRF (Origin / Sec-Fetch-Site) and session
+ * middleware run before this router (src/app.ts wires csrf → session →
+ * routes for the whole main site, /api included), so a cross-origin POST
+ * dies with 403 before reaching these handlers.
+ */
 export const apiRoutes = new Hono<DispatchEnv>();
 
-apiRoutes.post("/mirror", (c) =>
-  c.json({ error: "Not implemented until P5 (editor + dashboard)" }, 501),
-);
+/** Mirror publishes per pubkey per window (schnorr + render CPU bound). */
+const MIRROR_MAX = 30;
+const MIRROR_WINDOW_SECONDS = 5 * 60;
+
+/**
+ * Body cap, enforced from Content-Length before the JSON parse. isNostrEvent
+ * re-caps the parsed fields (content ≤ 256Ki code units etc.); this bound
+ * just refuses to buffer absurd bodies at all.
+ */
+const MAX_MIRROR_BODY_BYTES = 2_000_000;
+
+/**
+ * POST /api/mirror — mirror a signed event for the LOGGED-IN key.
+ *
+ * The editor (public/js/editor.js) signs kind 30023 posts / kind 5 deletes
+ * with the user's NIP-07 extension, broadcasts them to the user's relays
+ * client-side (best-effort), and POSTs them here so the blog updates
+ * immediately instead of waiting for the next cron refresh.
+ *
+ * Tenant isolation (P5 focus): ev.pubkey MUST equal the session pubkey —
+ * a signed-in user can only ever publish or delete AS THEMSELVES, no matter
+ * whose validly-signed events they replay into this endpoint. Kind 5 side
+ * effects are additionally scoped to the signer's own rows inside
+ * mirrorEvent (P3), so this check plus that scope give defense in depth.
+ */
+apiRoutes.post("/mirror", async (c) => {
+  const sess = c.var.session;
+  if (!sess) return c.json({ error: "authentication required" }, 401);
+
+  const contentLength = Number(c.req.header("content-length") ?? "0");
+  if (!Number.isFinite(contentLength) || contentLength > MAX_MIRROR_BODY_BYTES) {
+    return c.json({ error: "body too large" }, 413);
+  }
+
+  // Rate limit before the expensive work (schnorr verify + render-at-ingest).
+  if (
+    !(await rateLimitAllows(
+      c.env,
+      `mirror:pk:${sess.pubkey}`,
+      MIRROR_MAX,
+      MIRROR_WINDOW_SECONDS,
+    ))
+  ) {
+    return c.json({ error: "rate limited, try again later" }, 429);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "body must be JSON" }, 400);
+  }
+  if (!isNostrEvent(body)) {
+    return c.json({ error: "body must be a signed Nostr event" }, 400);
+  }
+  const ev = body;
+
+  // Tenant isolation: only the session's own key may be published. 403 —
+  // the event may be perfectly valid, it just is not YOURS.
+  if (ev.pubkey !== sess.pubkey) {
+    return c.json({ error: "event pubkey does not match the signed-in key" }, 403);
+  }
+
+  // Only long-form posts and deletes flow through the editor; profiles and
+  // everything else arrive via the relay sync paths (cron refresh).
+  if (ev.kind !== 30023 && ev.kind !== 5) {
+    return c.json(
+      { error: "only kind 30023 (post) and kind 5 (delete) are accepted" },
+      400,
+    );
+  }
+
+  const result = await mirrorEvent(c.env, ev);
+  return c.json({ result }, result === "invalid" ? 422 : 200);
+});

@@ -45,11 +45,11 @@ describe("worker end-to-end (SELF.fetch)", () => {
     expect(res.status).toBe(404);
   });
 
-  it("P5-stubbed endpoints respond 501, not 404, on the apex", async () => {
+  it("the mirror API exists on the apex and gates on the session (401 anon)", async () => {
     const mirror = await SELF.fetch("https://nostrbook.net/api/mirror", {
       method: "POST",
     });
-    expect(mirror.status).toBe(501);
+    expect(mirror.status).toBe(401); // P5: session required, not a 404/501 stub
   });
 
   it("apex auth/dashboard routes are not exposed on blog subdomains", async () => {

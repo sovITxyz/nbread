@@ -7,19 +7,50 @@ import {
   claimHandle,
   getUserByPubkey,
   HANDLE_REGEX,
+  readBlogSettings,
+  updateBlogSettings,
+  type User,
 } from "../services/users";
 import { rateLimitAllows } from "../services/ratelimit";
-import { DashboardPage } from "../views/main/dashboard";
+import { getPost, listPostsByPubkey, rowToEvent } from "../services/events";
+import { bumpGen } from "../services/mirror";
+import { renderPost } from "../markdown";
+import { sanitizeCss, MAX_THEME_CSS_LENGTH } from "../markdown/css-sanitize";
+import { firstTagValue, isoDate, postMeta } from "../markdown/nip23";
+import { relayList } from "../cron/refresh";
+import { DashboardPage, type DashboardPost } from "../views/main/dashboard";
+import { EditorPage } from "../views/main/editor";
 
 /**
- * Dashboard (apex only, session required): P4 ships the minimal authed shell
- * — npub display + handle claim. Post list / settings / editor arrive in P5.
+ * Dashboard (apex only, session required): handle claim (P4), the signed-in
+ * user's post list, blog settings, the editor pages, and the server-rendered
+ * markdown preview (P5). All POSTs are covered by the csrf middleware wired
+ * before this router in src/app.ts.
  */
 export const dashboardRoutes = new Hono<DispatchEnv>();
 
 /** Claim rate limit: 3 per hour per IP (D1 rate_limits, fixed window). */
 const CLAIM_MAX = 3;
 const CLAIM_WINDOW_SECONDS = 60 * 60;
+
+/**
+ * Preview rate limit per pubkey. Preview runs renderPost on the REQUEST path
+ * (hostile 32 KiB markdown ≈ 150ms CPU — see MAX_MARKDOWN_LENGTH), which the
+ * public tenant routes are forbidden to do; for the authed editor it is
+ * unavoidable, so it is budgeted instead.
+ */
+const PREVIEW_MAX = 60;
+const PREVIEW_WINDOW_SECONDS = 5 * 60;
+
+/** Body cap for the preview endpoint (Content-Length pre-check). */
+const MAX_PREVIEW_BODY_BYTES = 400_000;
+
+/** Cap on the stored about text (settings form). */
+const MAX_ABOUT_LENGTH = 1_000;
+
+/** Caps on the relay list (settings form). */
+export const MAX_RELAYS = 10;
+const MAX_RELAY_URL_LENGTH = 200;
 
 // --- Turnstile ---------------------------------------------------------------
 
@@ -78,10 +109,49 @@ export function setTurnstileVerifierForTests(
   turnstileVerifier = fn ?? siteverifyTurnstile;
 }
 
-// --- Routes --------------------------------------------------------------------
+// --- Helpers -------------------------------------------------------------------
 
 function clientIp(c: Context<DispatchEnv>): string {
   return c.req.header("CF-Connecting-IP") ?? "unknown";
+}
+
+/**
+ * Relays the editor should broadcast to: the user's configured list, falling
+ * back to the service defaults (RELAYS env var) when none are set.
+ */
+function editorRelays(env: Env, user: User | null): string[] {
+  const configured = readBlogSettings(user?.settings ?? "{}").relays;
+  return configured.length > 0 ? configured : relayList(env);
+}
+
+/**
+ * Parse + validate the relay-list textarea (one wss:// URL per line; commas
+ * tolerated). Returns null when ANY entry is invalid — settings saves are
+ * all-or-nothing so a typo never silently drops a relay.
+ */
+export function parseRelayList(input: string): string[] | null {
+  const entries = input
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (entries.length > MAX_RELAYS) return null;
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (entry.length > MAX_RELAY_URL_LENGTH) return null;
+    let url: URL;
+    try {
+      url = new URL(entry);
+    } catch {
+      return null;
+    }
+    // wss:// only: the editor opens these from a https page (mixed-content
+    // rules would block ws://) and the cron sync treats them as trusted-ish
+    // transport. Credentials in the URL are rejected outright.
+    if (url.protocol !== "wss:" || url.hostname.length === 0) return null;
+    if (url.username !== "" || url.password !== "") return null;
+    out.push(url.toString());
+  }
+  return [...new Set(out)];
 }
 
 async function renderDashboard(
@@ -89,8 +159,14 @@ async function renderDashboard(
   pubkey: string,
   error: string | null,
   status: 200 | 400 | 403 | 409 | 429,
+  saved = false,
 ) {
   const user = await getUserByPubkey(c.env, pubkey);
+  const rows = await listPostsByPubkey(c.env, pubkey);
+  const posts: DashboardPost[] = rows.map((row) => {
+    const meta = postMeta(rowToEvent(row));
+    return { slug: row.d_tag, title: meta.title, date: isoDate(meta.published_at) };
+  });
   return c.html(
     DashboardPage({
       npub: npubEncode(pubkey),
@@ -98,15 +174,26 @@ async function renderDashboard(
       mainHost: c.env.MAIN_HOST.toLowerCase(),
       turnstileSiteKey: c.env.TURNSTILE_SITE_KEY,
       error,
+      saved,
+      posts,
+      settings: readBlogSettings(user?.settings ?? "{}"),
     }),
     status,
   );
 }
 
+// --- Routes --------------------------------------------------------------------
+
 dashboardRoutes.get("/", async (c) => {
   const sess = c.var.session;
   if (!sess) return c.redirect("/login", 302);
-  return renderDashboard(c, sess.pubkey, null, 200);
+  return renderDashboard(
+    c,
+    sess.pubkey,
+    null,
+    200,
+    c.req.query("saved") === "1",
+  );
 });
 
 const CLAIM_ERROR_RESPONSES: Record<
@@ -196,4 +283,148 @@ dashboardRoutes.post("/claim", async (c) => {
     throw err;
   }
   return c.redirect("/dashboard", 303);
+});
+
+// --- POST /dashboard/settings — theme CSS, about, relay list --------------------
+dashboardRoutes.post("/settings", async (c) => {
+  const sess = c.var.session;
+  if (!sess) return c.json({ error: "authentication required" }, 401);
+
+  const body = await c.req.parseBody();
+  const cssRaw = typeof body.css === "string" ? body.css : "";
+  const aboutRaw = typeof body.about === "string" ? body.about : "";
+  const relaysRaw = typeof body.relays === "string" ? body.relays : "";
+
+  if (cssRaw.length > MAX_THEME_CSS_LENGTH) {
+    return renderDashboard(
+      c,
+      sess.pubkey,
+      `Theme CSS is too large (max ${MAX_THEME_CSS_LENGTH} characters).`,
+      400,
+    );
+  }
+
+  const relays = parseRelayList(relaysRaw);
+  if (relays === null) {
+    return renderDashboard(
+      c,
+      sess.pubkey,
+      `Relay list must be at most ${MAX_RELAYS} wss:// URLs, one per line.`,
+      400,
+    );
+  }
+
+  // Sanitize the theme CSS at WRITE time (P2 addendum: "P5 should
+  // additionally sanitize CSS at settings-save time"). The blog layout
+  // re-sanitizes at render as the last gate — the stored value must already
+  // be declawed so nothing hostile ever round-trips through D1.
+  const css = sanitizeCss(cssRaw);
+  const about = aboutRaw
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .slice(0, MAX_ABOUT_LENGTH);
+
+  await updateBlogSettings(c.env, sess.pubkey, { css, about, relays });
+  // Theme/about changes must show up on the (edge-cached) blog immediately.
+  await bumpGen(c.env, sess.pubkey);
+  return c.redirect("/dashboard?saved=1", 303);
+});
+
+// --- Editor pages ----------------------------------------------------------------
+
+dashboardRoutes.get("/posts/new", async (c) => {
+  const sess = c.var.session;
+  if (!sess) return c.redirect("/login", 302);
+  const user = await getUserByPubkey(c.env, sess.pubkey);
+  return c.html(
+    EditorPage({
+      mode: "new",
+      slug: "",
+      title: "",
+      summary: "",
+      content: "",
+      publishedAt: null,
+      prevCreatedAt: null,
+      eventId: null,
+      pubkey: sess.pubkey,
+      relays: editorRelays(c.env, user),
+      handle: user?.handle ?? null,
+      mainHost: c.env.MAIN_HOST.toLowerCase(),
+    }),
+  );
+});
+
+dashboardRoutes.get("/posts/:slug", async (c) => {
+  const sess = c.var.session;
+  if (!sess) return c.redirect("/login", 302);
+  const slug = c.req.param("slug");
+  // Own posts only: the lookup is keyed by the SESSION pubkey, so /dashboard
+  // can never open (or later delete) someone else's post.
+  const row = await getPost(c.env, sess.pubkey, slug);
+  if (!row) return c.text("post not found", 404);
+  const ev = rowToEvent(row);
+  const meta = postMeta(ev);
+  const user = await getUserByPubkey(c.env, sess.pubkey);
+  return c.html(
+    EditorPage({
+      mode: "edit",
+      slug: row.d_tag,
+      title: firstTagValue(ev, "title") ?? meta.title,
+      summary: firstTagValue(ev, "summary") ?? "",
+      content: row.content,
+      publishedAt: meta.published_at,
+      prevCreatedAt: row.created_at,
+      eventId: row.id,
+      pubkey: sess.pubkey,
+      relays: editorRelays(c.env, user),
+      handle: user?.handle ?? null,
+      mainHost: c.env.MAIN_HOST.toLowerCase(),
+    }),
+  );
+});
+
+// --- POST /dashboard/preview — server-rendered markdown preview -----------------
+// Runs the EXACT pipeline mirrorEvent uses at ingest (renderPost =
+// markdown-it + sanitize), so preview HTML === published HTML byte for byte.
+dashboardRoutes.post("/preview", async (c) => {
+  const sess = c.var.session;
+  if (!sess) return c.json({ error: "authentication required" }, 401);
+
+  const contentLength = Number(c.req.header("content-length") ?? "0");
+  if (!Number.isFinite(contentLength) || contentLength > MAX_PREVIEW_BODY_BYTES) {
+    return c.json({ error: "body too large" }, 413);
+  }
+
+  if (
+    !(await rateLimitAllows(
+      c.env,
+      `preview:pk:${sess.pubkey}`,
+      PREVIEW_MAX,
+      PREVIEW_WINDOW_SECONDS,
+    ))
+  ) {
+    return c.json({ error: "rate limited, try again later" }, 429);
+  }
+
+  let markdown = "";
+  try {
+    const body: unknown = await c.req.json();
+    if (
+      body !== null &&
+      typeof body === "object" &&
+      "markdown" in body &&
+      typeof (body as { markdown: unknown }).markdown === "string"
+    ) {
+      markdown = (body as { markdown: string }).markdown;
+    } else {
+      return c.json({ error: "body must be JSON with a markdown string" }, 400);
+    }
+  } catch {
+    return c.json({ error: "body must be JSON" }, 400);
+  }
+
+  return c.body(renderPost(markdown), 200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
 });

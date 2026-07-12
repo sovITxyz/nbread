@@ -166,6 +166,28 @@ check_post "login rejects a garbage body" 400 "$MAIN_HOST" "/login" '{"not":"an 
 check_post "login enforces CSRF (cross-origin)" 403 "$MAIN_HOST" "/login" '{}' "https://evil.example"
 check_post "claim requires a session" 401 "$MAIN_HOST" "/dashboard/claim" '{}'
 
+# --- P5: editor + dashboard ------------------------------------------------------
+check "editor (new post) redirects anonymous to login" 302 "$MAIN_HOST" "/dashboard/posts/new"
+check "editor.js asset served" 200 "$MAIN_HOST" "/js/editor.js"
+check_post "mirror API requires a session" 401 "$MAIN_HOST" "/api/mirror" '{}'
+check_post "mirror API enforces CSRF (cross-origin)" 403 "$MAIN_HOST" "/api/mirror" '{}' "https://evil.example"
+check_post "preview requires a session" 401 "$MAIN_HOST" "/dashboard/preview" '{"markdown":"# hi"}'
+check_post "settings require a session" 401 "$MAIN_HOST" "/dashboard/settings" '{}'
+check_post "settings enforce CSRF (cross-origin)" 403 "$MAIN_HOST" "/dashboard/settings" '{}' "https://evil.example"
+
+# --- P5 MANUAL check (documented, not automated): full write→render loop ---------
+# The end-to-end publish flow needs a REAL NIP-07 extension signing in a real
+# browser, which curl cannot drive. Once per release, verify by hand:
+#   1. `npx wrangler dev` and open http://127.0.0.1:8787/login in a browser
+#      with a NIP-07 extension (Alby / nos2x) installed;
+#   2. sign in (extension prompt), claim a handle on /dashboard;
+#   3. /dashboard → "New post" → write markdown → Preview (server-rendered,
+#      identical to the publish pipeline) → "Sign & publish" (extension
+#      prompt) — the editor POSTs the signed event to /api/mirror and
+#      broadcasts it to the configured relays;
+#   4. confirm the post renders on the blog host, then Edit → republish
+#      (replaceable update wins) and Delete (signed kind 5) → post disappears.
+
 echo
 echo "smoke: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

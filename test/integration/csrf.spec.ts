@@ -101,8 +101,8 @@ describe("csrf middleware (main site)", () => {
     expect(logout.status).toBe(403);
   });
 
-  it("covers JSON API stubs as well", async () => {
+  it("covers the JSON API as well", async () => {
     const res = await post("/api/mirror", { Origin: "https://evil.com" });
-    expect(res.status).toBe(403); // CSRF beats the 501 stub
+    expect(res.status).toBe(403); // CSRF beats even the session check
   });
 });
