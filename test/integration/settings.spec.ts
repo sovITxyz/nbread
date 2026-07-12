@@ -191,7 +191,7 @@ describe("GET /dashboard — post list + settings form", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("Hello world"); // own post listed
-    expect(html).toContain('href="/dashboard/posts/hello-world"'); // edit link
+    expect(html).toContain('href="/dashboard/editor?slug=hello-world"'); // edit link
     expect(html).toContain('href="/dashboard/posts/new"'); // new post button
     expect(html).toContain('action="/dashboard/settings"'); // settings form
     expect(html).toContain('name="css"');

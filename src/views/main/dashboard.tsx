@@ -118,7 +118,7 @@ export function DashboardPage(props: {
                   {post.slug !== "" ? (
                     <a
                       class="post-edit-link"
-                      href={`/dashboard/posts/${encodeURIComponent(post.slug)}`}
+                      href={`/dashboard/editor?slug=${encodeURIComponent(post.slug)}`}
                     >
                       Edit
                     </a>
@@ -160,6 +160,8 @@ export function DashboardPage(props: {
               <label>
                 Theme CSS
                 <br />
+                {/* Protective leading "\n" (the HTML parser eats one) so CSS
+                    that begins with a newline survives the edit round-trip. */}
                 <textarea
                   name="css"
                   rows={8}
@@ -167,7 +169,7 @@ export function DashboardPage(props: {
                   spellcheck={false}
                   placeholder={"body { background: #fffdf5; }"}
                 >
-                  {props.settings.css}
+                  {"\n" + props.settings.css}
                 </textarea>
               </label>
             </p>

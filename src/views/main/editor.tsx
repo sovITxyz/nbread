@@ -113,6 +113,10 @@ export function EditorPage(props: {
             <label>
               Markdown
               <br />
+              {/* The textarea is seeded with a protective leading "\n" the
+                  HTML parser eats exactly one of, so content that itself
+                  starts with a newline round-trips unchanged — otherwise
+                  republishing would strip it and mint a different event id. */}
               <textarea
                 id="post-content"
                 name="content"
@@ -121,7 +125,7 @@ export function EditorPage(props: {
                 required
                 spellcheck={true}
               >
-                {props.content}
+                {"\n" + props.content}
               </textarea>
             </label>
           </p>

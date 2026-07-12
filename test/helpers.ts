@@ -31,15 +31,16 @@ export async function seedBlockedMallory(): Promise<void> {
 }
 
 /**
- * Wipe all mirror state (events, posts_fts, profiles, gen counters).
- * Storage persists across `it` blocks within a test file, so specs that
- * assert exact counts/generations reset explicitly in beforeEach.
+ * Wipe all mirror state (events, posts_fts, profiles, delete horizons, gen
+ * counters). Storage persists across `it` blocks within a test file, so specs
+ * that assert exact counts/generations reset explicitly in beforeEach.
  */
 export async function resetMirrorState(): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM posts_fts"),
     env.DB.prepare("DELETE FROM events"),
     env.DB.prepare("DELETE FROM profiles"),
+    env.DB.prepare("DELETE FROM delete_horizons"),
   ]);
   await Promise.all(
     [ALICE_PK, BOB_PK, MALLORY_PK].map((pk) => env.KV.delete(`gen:${pk}`)),

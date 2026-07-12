@@ -211,11 +211,13 @@ export async function mirrorEvent(
 }
 
 /**
- * Does a stored kind 5 of the same pubkey delete this (kind, pubkey, d_tag)
- * address at or after `ev.created_at`? One row per (pubkey, 5, d_tag) slot
- * exists at most, so this scan is cheap. Known limitation (schema-imposed):
- * a newer delete REPLACES an older one in the same slot, so an old delete's
- * horizon survives only as long as its marker row does.
+ * Does a kind 5 of the same pubkey delete this (kind, pubkey, d_tag) address
+ * at or after `ev.created_at`? Consults the `delete_horizons` table, which
+ * keeps the MAX created_at of any delete that has ever a-tagged this address
+ * (migration 0004, P5 review fix). Storing horizons OUTSIDE the single
+ * replaceable kind-5 slot means a later delete overwriting the stored marker
+ * can no longer erase an earlier delete's horizon — so a late-arriving
+ * intermediate edit cannot resurrect a serially-deleted post.
  */
 async function coveredByDeleteHorizon(
   env: Env,
@@ -223,25 +225,12 @@ async function coveredByDeleteHorizon(
   dTag: string,
 ): Promise<boolean> {
   const addr = `${ev.kind}:${ev.pubkey}:${dTag}`;
-  const rs = await env.DB.prepare(
-    "SELECT tags FROM events WHERE pubkey = ? AND kind = 5 AND created_at >= ?",
+  const row = await env.DB.prepare(
+    "SELECT deleted_at FROM delete_horizons WHERE address = ?",
   )
-    .bind(ev.pubkey, ev.created_at)
-    .all<{ tags: string }>();
-  for (const row of rs.results) {
-    try {
-      const tags: unknown = JSON.parse(row.tags);
-      if (!Array.isArray(tags)) continue;
-      for (const tag of tags) {
-        if (Array.isArray(tag) && tag[0] === "a" && tag[1] === addr) {
-          return true;
-        }
-      }
-    } catch {
-      // malformed tags blob — ignore this marker
-    }
-  }
-  return false;
+    .bind(addr)
+    .first<{ deleted_at: number }>();
+  return row !== null && row.deleted_at >= ev.created_at;
 }
 
 /**
@@ -300,6 +289,17 @@ async function applyDelete(
            WHERE pubkey = ? AND kind = ? AND d_tag = ? AND kind != 5
              AND created_at <= ?`,
         ).bind(ev.pubkey, a.kind, a.dTag, ev.created_at),
+      );
+      // Persist the delete horizon for this address OUTSIDE the replaceable
+      // kind-5 slot (migration 0004): keep the MAX delete created_at so a
+      // later delete overwriting the stored marker can never erase it, and a
+      // late intermediate edit cannot resurrect a serially-deleted post.
+      stmts.push(
+        env.DB.prepare(
+          `INSERT INTO delete_horizons (address, deleted_at) VALUES (?, ?)
+           ON CONFLICT(address) DO UPDATE SET
+             deleted_at = MAX(delete_horizons.deleted_at, excluded.deleted_at)`,
+        ).bind(`${a.kind}:${ev.pubkey}:${a.dTag}`, ev.created_at),
       );
     }
     // Hidden posts leave the search index.

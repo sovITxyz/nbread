@@ -168,6 +168,7 @@ check_post "claim requires a session" 401 "$MAIN_HOST" "/dashboard/claim" '{}'
 
 # --- P5: editor + dashboard ------------------------------------------------------
 check "editor (new post) redirects anonymous to login" 302 "$MAIN_HOST" "/dashboard/posts/new"
+check "editor (edit) redirects anonymous to login" 302 "$MAIN_HOST" "/dashboard/editor?slug=hello-world"
 check "editor.js asset served" 200 "$MAIN_HOST" "/js/editor.js"
 check_post "mirror API requires a session" 401 "$MAIN_HOST" "/api/mirror" '{}'
 check_post "mirror API enforces CSRF (cross-origin)" 403 "$MAIN_HOST" "/api/mirror" '{}' "https://evil.example"

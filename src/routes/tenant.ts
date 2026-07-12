@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { DispatchEnv } from "../types";
 import type { NostrEvent } from "../nostr/event";
-import type { User } from "../services/users";
+import { readBlogSettings, type User } from "../services/users";
 import type { BlogProfile } from "../views/tenant/layout";
 import {
   getPost as getPostRow,
@@ -78,6 +78,8 @@ type BlogCtx = {
   pubkey: string;
   handle: string;
   themeCss: string;
+  /** Dashboard-configured about (users.settings.$.about); "" when unset. */
+  about: string;
   baseUrl: string;
   mainHost: string;
 };
@@ -110,6 +112,7 @@ function blogCtx(c: Context<DispatchEnv>): BlogCtx | null {
     pubkey: site.pubkey,
     handle,
     themeCss: themeCssOf(site.user),
+    about: readBlogSettings(site.user.settings).about,
     baseUrl: `https://${handle}.${mainHost}`,
     mainHost,
   };
@@ -137,6 +140,7 @@ tenantRoutes.get("/", async (c) => {
       handle: ctx.handle,
       profile,
       posts,
+      about: ctx.about,
       themeCss: ctx.themeCss,
       mainHost: ctx.mainHost,
     }),
@@ -218,6 +222,7 @@ tenantRoutes.get("/:slug", async (c) => {
       profile,
       event: post.event,
       bodyHtml: post.html,
+      about: ctx.about,
       themeCss: ctx.themeCss,
       mainHost: ctx.mainHost,
     }),

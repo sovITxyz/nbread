@@ -208,7 +208,7 @@ describe("POST /api/mirror — publish / edit / delete loop", () => {
 
 describe("editor pages", () => {
   it("redirects anonymous users to /login", async () => {
-    for (const path of ["/dashboard/posts/new", "/dashboard/posts/hello-world"]) {
+    for (const path of ["/dashboard/posts/new", "/dashboard/editor?slug=hello-world"]) {
       const res = await SELF.fetch(`https://nostrbook.net${path}`, {
         redirect: "manual",
       });
@@ -234,7 +234,7 @@ describe("editor pages", () => {
     await mirrorEvent(env, aliceHello);
     const cookie = await sessionCookieFor(ALICE_PK);
     const res = await SELF.fetch(
-      "https://nostrbook.net/dashboard/posts/hello-world",
+      "https://nostrbook.net/dashboard/editor?slug=hello-world",
       { headers: { Cookie: cookie } },
     );
     expect(res.status).toBe(200);
@@ -250,7 +250,7 @@ describe("editor pages", () => {
     const cookie = await sessionCookieFor(ALICE_PK);
     for (const slug of ["no-such-post", "bob-first"]) {
       const res = await SELF.fetch(
-        `https://nostrbook.net/dashboard/posts/${slug}`,
+        `https://nostrbook.net/dashboard/editor?slug=${slug}`,
         { headers: { Cookie: cookie } },
       );
       expect(res.status, slug).toBe(404);
@@ -261,7 +261,7 @@ describe("editor pages", () => {
     await mirrorEvent(env, aliceXss);
     const cookie = await sessionCookieFor(ALICE_PK);
     const res = await SELF.fetch(
-      "https://nostrbook.net/dashboard/posts/xss-test",
+      "https://nostrbook.net/dashboard/editor?slug=xss-test",
       { headers: { Cookie: cookie } },
     );
     expect(res.status).toBe(200);

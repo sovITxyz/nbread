@@ -45,6 +45,16 @@ const PREVIEW_WINDOW_SECONDS = 5 * 60;
 /** Body cap for the preview endpoint (Content-Length pre-check). */
 const MAX_PREVIEW_BODY_BYTES = 400_000;
 
+/**
+ * Settings-save rate limit per pubkey. Sessions are permissionless (anyone can
+ * generate a keypair and sign a login), and every save bumps the KV gen and
+ * writes D1; without a cap one authenticated key could loop the endpoint and
+ * exhaust the platform-wide free-tier KV write budget (1,000/day), breaking
+ * cache invalidation AND new-login session creation for ALL tenants.
+ */
+const SETTINGS_MAX = 20;
+const SETTINGS_WINDOW_SECONDS = 5 * 60;
+
 /** Cap on the stored about text (settings form). */
 const MAX_ABOUT_LENGTH = 1_000;
 
@@ -290,6 +300,30 @@ dashboardRoutes.post("/settings", async (c) => {
   const sess = c.var.session;
   if (!sess) return c.json({ error: "authentication required" }, 401);
 
+  // Rate limit BEFORE any KV/D1 write (see SETTINGS_MAX): a permissionless
+  // session must not be able to burn the platform-wide KV write budget.
+  if (
+    !(await rateLimitAllows(
+      c.env,
+      `settings:pk:${sess.pubkey}`,
+      SETTINGS_MAX,
+      SETTINGS_WINDOW_SECONDS,
+    ))
+  ) {
+    return renderDashboard(
+      c,
+      sess.pubkey,
+      "Too many settings saves — try again later.",
+      429,
+    );
+  }
+
+  // Blocked keys cannot persist settings (mirrors the claim + mirror routes).
+  const currentUser = await getUserByPubkey(c.env, sess.pubkey);
+  if (currentUser?.blocked) {
+    return renderDashboard(c, sess.pubkey, "This account is blocked.", 403);
+  }
+
   const body = await c.req.parseBody();
   const cssRaw = typeof body.css === "string" ? body.css : "";
   const aboutRaw = typeof body.about === "string" ? body.about : "";
@@ -325,8 +359,13 @@ dashboardRoutes.post("/settings", async (c) => {
     .slice(0, MAX_ABOUT_LENGTH);
 
   await updateBlogSettings(c.env, sess.pubkey, { css, about, relays });
-  // Theme/about changes must show up on the (edge-cached) blog immediately.
-  await bumpGen(c.env, sess.pubkey);
+  // Only css/about are rendered on the (edge-cached) blog, so only a real
+  // change to either warrants a KV gen bump — a no-op save (or a relays-only
+  // change) costs zero KV writes. Bumps are the scarce free-tier resource.
+  const prev = readBlogSettings(currentUser?.settings ?? "{}");
+  if (prev.css !== css || prev.about !== about) {
+    await bumpGen(c.env, sess.pubkey);
+  }
   return c.redirect("/dashboard?saved=1", 303);
 });
 
@@ -354,10 +393,16 @@ dashboardRoutes.get("/posts/new", async (c) => {
   );
 });
 
-dashboardRoutes.get("/posts/:slug", async (c) => {
+// Edit page for an existing post. The slug (d-tag) is a QUERY parameter, not a
+// path segment, so hostile / colliding d-tags — "new" (which the editor's own
+// slugify mints from the title "New", and relay-mirrored posts may carry), ".",
+// ".." — address the correct post instead of being shadowed by /posts/new or
+// path-normalized by the browser.
+dashboardRoutes.get("/editor", async (c) => {
   const sess = c.var.session;
   if (!sess) return c.redirect("/login", 302);
-  const slug = c.req.param("slug");
+  const slug = c.req.query("slug") ?? "";
+  if (slug === "") return c.text("post not found", 404);
   // Own posts only: the lookup is keyed by the SESSION pubkey, so /dashboard
   // can never open (or later delete) someone else's post.
   const row = await getPost(c.env, sess.pubkey, slug);
@@ -390,9 +435,19 @@ dashboardRoutes.post("/preview", async (c) => {
   const sess = c.var.session;
   if (!sess) return c.json({ error: "authentication required" }, 401);
 
-  const contentLength = Number(c.req.header("content-length") ?? "0");
-  if (!Number.isFinite(contentLength) || contentLength > MAX_PREVIEW_BODY_BYTES) {
-    return c.json({ error: "body too large" }, 413);
+  // Require Content-Length: a missing header would let a chunked / CL-less
+  // POST pass a `Number(undefined ?? "0") === 0` check and buffer a
+  // platform-sized body before renderPost's caps apply. Browsers always send
+  // it for a fetch with a string body, so editor.js is unaffected.
+  const clHeader = c.req.header("content-length");
+  const contentLength = Number(clHeader);
+  if (
+    clHeader === undefined ||
+    clHeader === "" ||
+    !Number.isFinite(contentLength) ||
+    contentLength > MAX_PREVIEW_BODY_BYTES
+  ) {
+    return c.json({ error: "missing or oversized body" }, 413);
   }
 
   if (
