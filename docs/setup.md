@@ -74,3 +74,29 @@ wrangler secret put ADMIN_PUBKEY      # OPTIONAL: hex/npub admin identity for /a
 - Post-launch: configure the WAF rate rule + scanner-path block
   (`docs/ops.md` §3) and set `ADMIN_PUBKEY` if the blocklist admin is wanted
   (`docs/ops.md` §5).
+
+## 6. Deployment record — LIVE (2026-07-13)
+
+Account **Sovereign IT** (`2d2cca1238913def0ad9cc1f598a8e0b`), zone `nostrbook.net`.
+
+- **D1** `nostrbook` `e9163b12-3cde-4b82-961b-b825c85321e3` (region ENAM); all 4
+  migrations applied `--remote`; reserved handles seeded.
+- **KV** `75a4c5d58e1f449080bf8be64a995a5a` (binding `KV`).
+- **Turnstile** widget "nostrbook" (Managed), site key
+  `0x4AAAAAAD1JzzXDBykpiavq`, hostnames `nostrbook.net` +
+  `nostrbook.cameron-2d2.workers.dev`. Secret + `ADMIN_PUBKEY`
+  (`de7ab932…e377`, blocklist admin enabled) set via `wrangler secret put`.
+- **DNS**: apex `A @ 192.0.2.1` **Proxied**, apex `AAAA @ 100::` **Proxied**,
+  wildcard `CNAME * → nostrbook.net` **Proxied**. `www` A/AAAA left pointing at
+  the VPS (unproxied) — follow-up: repoint or add a `www → apex` redirect.
+  Mail TXT (SPF `-all`, DKIM, DMARC `p=reject`) untouched.
+- **SSL/TLS**: Full (strict); Always Use HTTPS **on**; HSTS `max-age=15552000`
+  (no `includeSubDomains`/preload yet); TLS 1.3 **on**.
+- **Worker**: deployed with routes `nostrbook.net/*` + `*.nostrbook.net/*`,
+  cron `*/15`. Gate A (workers.dev) + Gate B (prod) smoke both green
+  (54/54 vs prod).
+- **WAF**: `global-per-ip-throttle` (60 req/10s per IP, block 10s) +
+  `scanner-paths-block` (`.php`, `/wp-`, `/.env`, `.git/` → block).
+- **VPS note**: `nostrbook.net` no longer served by YunoHost; its Let's Encrypt
+  HTTP-01 renewal for that domain will now fail (Worker intercepts
+  `/.well-known/acme-challenge/`). Switch that cert to DNS-01 or retire it.
