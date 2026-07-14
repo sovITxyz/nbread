@@ -3,6 +3,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "nbread",
+  // Account that owns the nbread.lol zone (created 2026-07-14). Pins the
+  // deploy target so `wrangler deploy` never lands on the wrong account.
+  "account_id": "830ade508fd3f90a2a591477cdbd399c",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
   "assets": {
@@ -13,17 +16,17 @@
     {
       "binding": "DB",
       "database_name": "nbread",
-      // Sovereign IT account (region ENAM); created 2026-07-13 per docs/setup.md.
+      // Account 830ade… (region ENAM); created 2026-07-14 per docs/setup.md.
       // Local dev + tests use miniflare bindings and ignore this id.
-      "database_id": "e9163b12-3cde-4b82-961b-b825c85321e3",
+      "database_id": "8308f106-5d7f-443d-b34c-e8cb16728bd2",
       "migrations_dir": "migrations"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "KV",
-      // Sovereign IT account; created 2026-07-13 per docs/setup.md.
-      "id": "75a4c5d58e1f449080bf8be64a995a5a"
+      // Account 830ade…; created 2026-07-14 per docs/setup.md.
+      "id": "d01e2e69d35549bb8ee153ac4007dbe2"
     }
   ],
   "vars": {
@@ -34,12 +37,9 @@
     // "development" here — it enables the client-spoofable X-Forwarded-Host
     // override in src/middleware/guard.ts.
     "ENVIRONMENT": "production",
-    // NOTE: carried over from the old nostrbook.net Turnstile widget — this
-    // key will FAIL the hostname check on nbread.lol until a widget is
-    // (re)pointed at nbread.lol + the workers.dev preview host and this value
-    // + TURNSTILE_SECRET_KEY are updated (see docs/setup.md §6). Secret is a
-    // wrangler secret.
-    "TURNSTILE_SITE_KEY": "0x4AAAAAAD1JzzXDBykpiavq",
+    // Real Turnstile widget "nbread.lol" (Managed, account 830ade…) for the
+    // nbread.lol host. Secret is a wrangler secret (TURNSTILE_SECRET_KEY).
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAD1_vRxPvgk56oO-",
     // Default relays: the service-wide fallback used for cron sync + NIP-05
     // relay hints when a user has not set their own list (dashboard settings
     // override these, up to MAX_RELAYS). Comma-separated wss:// URLs.
@@ -52,12 +52,12 @@
   "triggers": {
     "crons": ["*/15 * * * *"]
   },
-  // Keep the workers.dev origin enabled alongside the zone routes: it is the
-  // Gate A preview target (docs/ops.md). Post-launch it is harmless — the
-  // host guard 404s every request whose Host is not MAIN_HOST or a
-  // single-label subdomain of it, and the committed MAIN_HOST is
-  // nbread.lol (Gate A previews override it per-deploy with --var).
-  "workers_dev": true,
+  // Disabled: the nbread.lol account (830ade…) has no workers.dev subdomain
+  // (account-global; auto-created on first Workers dashboard visit). Production
+  // serves via the nbread.lol zone routes below, so the workers.dev preview
+  // host is not needed. To re-enable Gate A previews, create an account
+  // workers.dev subdomain first, then flip this to true.
+  "workers_dev": false,
   "routes": [
     { "pattern": "nbread.lol/*", "zone_name": "nbread.lol" },
     { "pattern": "*.nbread.lol/*", "zone_name": "nbread.lol" }
