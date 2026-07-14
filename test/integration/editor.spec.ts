@@ -556,3 +556,74 @@ describe("editor pages — review-fix hardening", () => {
     expect(html).toContain(">\n\nfirst line after a blank</textarea>");
   });
 });
+
+// --- Redesign: toolbar / tabs / draft markup + CSP regression guard -----------
+
+describe("editor page — toolbar, tabs, and script wiring", () => {
+  // Must match editor-toolbar.js's action map and the toolbar in editor.tsx.
+  const MD_ACTIONS = [
+    "bold",
+    "italic",
+    "strike",
+    "mark",
+    "code",
+    "heading",
+    "quote",
+    "ul",
+    "ol",
+    "task",
+    "fence",
+    "table",
+    "footnote",
+    "hr",
+    "link",
+    "image",
+  ];
+
+  async function fetchEditorHtml(): Promise<string> {
+    const cookie = await sessionCookieFor(ALICE_PK);
+    const res = await SELF.fetch("https://nostrbook.net/dashboard/posts/new", {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    return res.text();
+  }
+
+  it("ships the toolbar with all 16 actions, the tablist, and the draft bar", async () => {
+    const html = await fetchEditorHtml();
+    expect(html).toContain('role="toolbar"');
+    for (const action of MD_ACTIONS) {
+      expect(html, action).toContain(`data-md-action="${action}"`);
+    }
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('id="tab-write"');
+    expect(html).toContain('id="tab-preview"');
+    expect(html).toContain('id="write-panel"');
+    expect(html).toContain('id="draft-notice"');
+    expect(html).toContain('id="draft-notice-text"');
+    expect(html).toContain('id="draft-restore"');
+    expect(html).toContain('id="draft-discard"');
+    expect(html).toContain('id="editor-meta"');
+  });
+
+  it("loads the three editor scripts in dependency order", async () => {
+    const html = await fetchEditorHtml();
+    const mdIdx = html.indexOf('src="/js/editor-md.js"');
+    const toolbarIdx = html.indexOf('src="/js/editor-toolbar.js"');
+    const editorIdx = html.indexOf('src="/js/editor.js"');
+    expect(mdIdx).toBeGreaterThan(-1);
+    expect(toolbarIdx).toBeGreaterThan(mdIdx);
+    expect(editorIdx).toBeGreaterThan(toolbarIdx);
+  });
+
+  it("has NO inline executable <script> — only the JSON config blob (CSP)", async () => {
+    const html = await fetchEditorHtml();
+    const tags = html.match(/<script\b[^>]*>/g) ?? [];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const tag of tags) {
+      const external = /\bsrc="/.test(tag);
+      const jsonBlob = tag.includes('type="application/json"');
+      expect(external || jsonBlob, tag).toBe(true);
+    }
+  });
+});

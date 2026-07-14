@@ -188,6 +188,7 @@
           },
           "Publishing to Nostrbook…",
         );
+        if (window.NostrbookDraft) window.NostrbookDraft.clear();
         window.location.href = "/dashboard";
         return;
       } catch (e) {
@@ -225,6 +226,7 @@
           },
           "Deleting…",
         );
+        if (window.NostrbookDraft) window.NostrbookDraft.clear();
         window.location.href = "/dashboard";
         return;
       } catch (e) {
@@ -235,29 +237,72 @@
     });
   }
 
+  // Preview renders lazily — on Preview-tab activation (editor-toolbar.js
+  // dispatches "nostrbook:preview-requested") or via a legacy
+  // #preview-button when one exists — and is cached on exact string
+  // identity: switching tabs without edits costs no request and none of the
+  // preview rate-limit budget.
+  var lastPreviewedValue = null;
+  var previewSeq = 0;
+
+  async function runPreview() {
+    var value = contentEl && contentEl.value ? contentEl.value : "";
+    if (value === lastPreviewedValue) return;
+    // Sequence guard: only the newest in-flight request may touch the DOM
+    // or the cache, so an out-of-order response can't present (and pin)
+    // stale markdown as current.
+    var seq = ++previewSeq;
+    try {
+      say("Rendering preview…");
+      var res = await fetch("/dashboard/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markdown: value }),
+      });
+      if (seq !== previewSeq) return;
+      if (res.status === 429) {
+        // Keep whatever preview is already on screen: only the refresh is
+        // throttled, publishing itself is not.
+        say(
+          "Preview rate-limited — published posts always use the server pipeline; try again in a few minutes.",
+        );
+        return;
+      }
+      if (!res.ok) {
+        throw new Error("preview failed (" + res.status + ")");
+      }
+      // Server-sanitized HTML from the exact publish pipeline — what you
+      // see here is byte-identical to what readers will get.
+      var html = await res.text();
+      if (seq !== previewSeq) return;
+      if (previewBody) previewBody.innerHTML = html;
+      // With tabs present, panel visibility belongs to the tab switcher —
+      // the user may have gone back to Write mid-fetch. Only force the
+      // panel visible in the legacy button-only layout, or when the
+      // Preview tab is still the selected one.
+      var tabPreview = document.getElementById("tab-preview");
+      if (
+        previewSection &&
+        (!tabPreview || tabPreview.getAttribute("aria-selected") === "true")
+      ) {
+        previewSection.hidden = false;
+      }
+      lastPreviewedValue = value;
+      say("");
+    } catch (e) {
+      if (seq === previewSeq) say(String((e && e.message) || e));
+    }
+  }
+
+  document.addEventListener("nostrbook:preview-requested", function () {
+    runPreview();
+  });
+
   if (previewBtn) {
     previewBtn.addEventListener("click", async function () {
       previewBtn.disabled = true;
       try {
-        say("Rendering preview…");
-        var res = await fetch("/dashboard/preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            markdown: contentEl && contentEl.value ? contentEl.value : "",
-          }),
-        });
-        if (!res.ok) {
-          throw new Error("preview failed (" + res.status + ")");
-        }
-        // Server-sanitized HTML from the exact publish pipeline — what you
-        // see here is byte-identical to what readers will get.
-        var html = await res.text();
-        if (previewBody) previewBody.innerHTML = html;
-        if (previewSection) previewSection.hidden = false;
-        say("");
-      } catch (e) {
-        say(String((e && e.message) || e));
+        await runPreview();
       } finally {
         previewBtn.disabled = false;
       }

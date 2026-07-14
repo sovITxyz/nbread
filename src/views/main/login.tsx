@@ -1,4 +1,5 @@
 import { Layout } from "../layout";
+import { SiteHeader, SiteFooter } from "./chrome";
 
 /**
  * Login page: NIP-07 challenge-response. All logic lives in /js/login.js
@@ -7,6 +8,7 @@ import { Layout } from "../layout";
 export function LoginPage() {
   return (
     <Layout title="Sign in — Nostrbook">
+      <SiteHeader />
       <main>
         <h1>Sign in</h1>
         <p>
@@ -26,6 +28,7 @@ export function LoginPage() {
         <p id="login-status" role="status" aria-live="polite"></p>
         <script src="/js/login.js"></script>
       </main>
+      <SiteFooter />
     </Layout>
   );
 }

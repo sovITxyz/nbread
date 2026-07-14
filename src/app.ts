@@ -13,6 +13,7 @@ import { authRoutes } from "./routes/auth";
 import { dashboardRoutes } from "./routes/dashboard";
 import { adminRoutes } from "./routes/admin";
 import { wellknownRoutes } from "./routes/wellknown";
+import { MainNotFound } from "./views/main/not-found";
 
 /**
  * App assembly.
@@ -44,6 +45,14 @@ mainApp.route("/dashboard", dashboardRoutes);
 mainApp.route("/admin", adminRoutes); // P7 blocklist admin (gated by ADMIN_PUBKEY)
 mainApp.route("/api", apiRoutes);
 mainApp.route("/.well-known", wellknownRoutes);
+// Apex 404: a friendly HTML page for browsers, plain text under /api where
+// clients expect no markup. Guard 404s (unknown hosts) and tenant/npub 404s
+// (blog class) are handled in their own layers and stay untouched.
+mainApp.notFound((c) =>
+  c.req.path.startsWith("/api")
+    ? c.text("Not found", 404)
+    : c.html(MainNotFound(), 404),
+);
 
 // --- Blog site (subdomains) --------------------------------------------------
 const blogApp = siteFromEnv(new Hono<DispatchEnv>());

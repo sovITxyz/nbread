@@ -1,4 +1,5 @@
 import { Layout } from "../layout";
+import { SiteHeader, SiteFooter } from "./chrome";
 import type { BlogSettings } from "../../services/users";
 
 /** One row of the dashboard post list. */
@@ -28,6 +29,7 @@ export function DashboardPage(props: {
 }) {
   return (
     <Layout title="Dashboard — Nostrbook">
+      <SiteHeader variant="app" />
       <main>
         <h1>Dashboard</h1>
         <p class="dashboard-npub">
@@ -196,6 +198,7 @@ export function DashboardPage(props: {
           <button type="submit">Sign out</button>
         </form>
       </main>
+      <SiteFooter />
     </Layout>
   );
 }
