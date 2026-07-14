@@ -2,6 +2,9 @@ import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { DispatchEnv } from "../types";
 import { MainHome } from "../views/main/home";
+import { PrivacyPage } from "../views/main/privacy";
+import { TermsPage } from "../views/main/terms";
+import { DocsPage } from "../views/main/docs";
 import { npubDecode } from "../nostr/nip19";
 import { fetchEvents } from "../nostr/relay";
 import type { NostrEvent } from "../nostr/event";
@@ -43,6 +46,29 @@ mainRoutes.get("/", (c) => c.html(MainHome()));
 mainRoutes.get("/healthz", (c) =>
   c.json({ ok: true, service: "nostrbook", environment: c.env.ENVIRONMENT }),
 );
+
+// --- Static info pages (/privacy /terms /docs) --------------------------------
+// Pure JSX with zero D1/KV access, identical for every visitor — so a plain
+// shared cache header is enough (no Cache API layer, no rate limit: rendering
+// costs only CPU, well inside the public-path budget).
+
+mainRoutes.get("/privacy", async (c) => {
+  const res = await c.html(PrivacyPage());
+  res.headers.set("Cache-Control", "public, max-age=3600");
+  return res;
+});
+
+mainRoutes.get("/terms", async (c) => {
+  const res = await c.html(TermsPage());
+  res.headers.set("Cache-Control", "public, max-age=3600");
+  return res;
+});
+
+mainRoutes.get("/docs", async (c) => {
+  const res = await c.html(DocsPage());
+  res.headers.set("Cache-Control", "public, max-age=3600");
+  return res;
+});
 
 // --- nostrbook.net/discover — cross-tenant recent-posts feed (P6) -------------
 // Serves STORED data only (titles/summaries from tag strings, escaped text —

@@ -194,11 +194,14 @@ describe("search (P6)", () => {
       ]);
     });
 
-    it("orders results created_at DESC with id ASC tie-break", async () => {
+    it("bm25 ties fall back to created_at DESC with id ASC tie-break", async () => {
+      // Three docs STRUCTURALLY IDENTICAL for the term (same tf per column,
+      // same token counts, no summary) → equal bm25 scores, so ordering must
+      // fall through to the deterministic created_at DESC, id ASC tail.
       const older = signPostEvent({
         sk: BOB_SK,
         d: "zebra-old",
-        title: "Zebraword older",
+        title: "Zebraword tie C",
         content: "zebraword body",
         created_at: 1700005000,
       });
@@ -223,6 +226,36 @@ describe("search (P6)", () => {
         tieA.id < tieB.id ? [tieA.id, tieB.id] : [tieB.id, tieA.id];
       const rows = await searchRows("zebraword");
       expect(rows.map((r) => r.id)).toEqual([firstTie, secondTie, older.id]);
+      // Stable across identical queries (no hidden nondeterminism).
+      const again = await searchRows("zebraword");
+      expect(again.map((r) => r.id)).toEqual(rows.map((r) => r.id));
+    });
+
+    it("bm25: an older title match outranks a newer content-only match", async () => {
+      // Inverts the old recency ordering: title carries weight 10 vs 1 for
+      // content, so the buried body hit loses despite being newer.
+      const titledOlder = signPostEvent({
+        sk: ALICE_SK,
+        d: "quokka-titled",
+        title: "Quokkaword field notes",
+        content: "A body that never mentions the search term.",
+        created_at: 1700001000,
+      });
+      const buriedNewer = signPostEvent({
+        sk: BOB_SK,
+        d: "quokka-buried",
+        title: "Completely unrelated title",
+        content:
+          "Opening paragraph about something else entirely. " +
+          "More filler prose to pad the body out further still. " +
+          "Only here, deep in the content, does quokkaword appear once.",
+        created_at: 1700009000,
+      });
+      for (const ev of [titledOlder, buriedNewer]) {
+        expect(await mirrorEvent(env, ev, { bumpGen: false })).toBe("stored");
+      }
+      const rows = await searchRows("quokkaword");
+      expect(rows.map((r) => r.id)).toEqual([titledOlder.id, buriedNewer.id]);
     });
   });
 

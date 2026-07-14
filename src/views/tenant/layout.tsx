@@ -1,4 +1,5 @@
 import type { Child } from "hono/jsx";
+import { FAVICON_HREF } from "../brand";
 import { sanitizeCss } from "../../markdown/css-sanitize";
 import { safeHttpUrl } from "../../markdown/sanitize";
 
@@ -50,6 +51,7 @@ export function BlogLayout(props: {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{props.title}</title>
+        <link rel="icon" type="image/svg+xml" href={FAVICON_HREF} />
         <link rel="stylesheet" href="/css/style.css" />
         <link
           rel="alternate"

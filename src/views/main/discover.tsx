@@ -1,4 +1,5 @@
 import { Layout } from "../layout";
+import { SiteHeader, SiteFooter } from "./chrome";
 import { FeedList, type FeedItem } from "./feed";
 
 /**
@@ -17,10 +18,8 @@ export function DiscoverPage(props: {
 }) {
   return (
     <Layout title="Discover — Nostrbook">
+      <SiteHeader current="discover" />
       <main class="discover">
-        <p class="site-nav">
-          <a href="/">Nostrbook</a> · <a href="/search">Search</a>
-        </p>
         <h1>Discover</h1>
         <p class="page-intro">
           Recent posts from blogs on {props.mainHost}.
@@ -49,6 +48,7 @@ export function DiscoverPage(props: {
           </nav>
         ) : null}
       </main>
+      <SiteFooter />
     </Layout>
   );
 }

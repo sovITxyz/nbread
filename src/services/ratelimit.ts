@@ -35,6 +35,31 @@ export async function checkRateLimit(
 }
 
 /**
+ * Retention bound for stale counter rows: two days comfortably exceeds the
+ * largest window in use (the 24h caps in auth.ts / main.ts), so the sweep
+ * can never delete a row a live window still needs.
+ */
+const SWEEP_RETENTION_SECONDS = 172_800;
+
+/**
+ * Purge counter rows whose window ended long ago. Runs from the cron tick,
+ * off the request hot path: rate-limit keys embed raw client IPs, and the
+ * privacy policy promises they are swept on a schedule rather than kept as
+ * a durable access log. Best-effort — a failed sweep only delays deletion
+ * until the next tick.
+ */
+export async function sweepRateLimits(env: Env): Promise<void> {
+  const cutoff = Math.floor(Date.now() / 1000) - SWEEP_RETENTION_SECONDS;
+  try {
+    await env.DB.prepare(`DELETE FROM rate_limits WHERE window_start < ?`)
+      .bind(cutoff)
+      .run();
+  } catch (err) {
+    console.error("rate_limits sweep failed:", err);
+  }
+}
+
+/**
  * Fail-closed convenience wrapper for abuse-sensitive endpoints (P4 auth /
  * claim): a D1 error denies the request instead of letting it through
  * unmetered. Same policy as the P3 npub mirror budget.

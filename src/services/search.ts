@@ -15,7 +15,7 @@ export const SEARCH_MAX_QUERY_CHARS = 256;
 /** Hard cap on the number of terms handed to MATCH. */
 export const SEARCH_MAX_TERMS = 8;
 
-/** Max results returned per search (single page; recency-ordered). */
+/** Max results returned per search (single page; relevance-ordered). */
 export const SEARCH_RESULT_LIMIT = DISCOVER_PAGE_SIZE;
 
 /**
@@ -51,9 +51,13 @@ export function toMatchQuery(raw: string): string {
  * blocked authors, or tombstoned posts never surface. FTS-row hygiene
  * (applyDelete removes rows) is NOT relied on; the join re-filters.
  *
- * Ordering matches discover and is deterministic: created_at DESC, id ASC
- * tie-break (recency, not bm25 — a blog platform's "search" is closer to a
- * filtered feed, and recency ordering keeps pagination/snapshots stable).
+ * Ordering is relevance-first via FTS5's bm25() aux function (valid here
+ * because the statement carries a posts_fts MATCH). bm25 returns LOWER
+ * scores for better matches, so the default ascending sort ranks best
+ * first. The weights 10/5/1 map positionally to the posts_fts columns
+ * (title, summary, content — see migrations/0001_init.sql): a title hit
+ * outranks a summary hit outranks a body hit. Equal-relevance rows fall
+ * back to created_at DESC, id ASC, keeping the order deterministic.
  *
  * Never throws on hostile input: the sanitizer guarantees an operator-free
  * MATCH expression. A REAL backend failure (D1 outage, schema drift, a
@@ -82,7 +86,7 @@ export async function searchPosts(
        WHERE posts_fts MATCH ?1
          AND e.kind = 30023 AND e.deleted = 0
          AND u.handle IS NOT NULL AND u.blocked = 0
-       ORDER BY e.created_at DESC, e.id ASC
+       ORDER BY bm25(posts_fts, 10.0, 5.0, 1.0), e.created_at DESC, e.id ASC
        LIMIT ?2`,
     )
       .bind(match, safeLimit)

@@ -1,4 +1,5 @@
 import { Layout } from "../layout";
+import { SiteHeader, SiteFooter } from "./chrome";
 import { FeedList, type FeedItem } from "./feed";
 import { SEARCH_MAX_QUERY_CHARS } from "../../services/search";
 
@@ -18,10 +19,8 @@ export function SearchPage(props: {
 }) {
   return (
     <Layout title="Search — Nostrbook">
+      <SiteHeader current="search" />
       <main class="search">
-        <p class="site-nav">
-          <a href="/">Nostrbook</a> · <a href="/discover">Discover</a>
-        </p>
         <h1>Search</h1>
         <form method="get" action="/search" class="search-form" role="search">
           <input
@@ -56,6 +55,7 @@ export function SearchPage(props: {
           </>
         )}
       </main>
+      <SiteFooter />
     </Layout>
   );
 }

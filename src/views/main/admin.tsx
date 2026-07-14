@@ -1,4 +1,5 @@
 import { Layout } from "../layout";
+import { SiteHeader, SiteFooter } from "./chrome";
 
 /** One blocked-user row on the admin page. */
 export type BlockedEntry = {
@@ -23,10 +24,8 @@ export function AdminPage(props: {
 }) {
   return (
     <Layout title="Admin — Nostrbook">
+      <SiteHeader variant="app" />
       <main class="admin">
-        <p class="site-nav">
-          <a href="/dashboard">← Dashboard</a>
-        </p>
         <h1>Admin</h1>
 
         {props.error ? (
@@ -95,6 +94,7 @@ export function AdminPage(props: {
           )}
         </section>
       </main>
+      <SiteFooter />
     </Layout>
   );
 }
