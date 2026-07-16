@@ -73,6 +73,16 @@ export const guard: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   const main = c.env.MAIN_HOST.toLowerCase();
 
+  // Canonicalize www → apex: www.<main> permanently redirects to the apex,
+  // preserving path + query. "www" is a reserved handle (never a blog), so the
+  // host carries no tenant meaning — sending it to the canonical apex avoids a
+  // dead 404 and keeps a single canonical origin. Runs before subdomain
+  // classification so www never reaches the tenant D1 lookup.
+  if (hostname === "www." + main) {
+    const url = new URL(c.req.url);
+    return c.redirect(`https://${main}${url.pathname}${url.search}`, 301);
+  }
+
   if (LOOPBACK_HOSTS.has(hostname)) {
     // wrangler dev convenience: treat the loopback host as the apex.
     c.set("host", main);
