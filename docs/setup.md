@@ -93,8 +93,9 @@ Account **`830ade508fd3f90a2a591477cdbd399c`** (Kinseycagney), zone `nbread.lol`
   `0x4AAAAAAD1_vRxPvgk56oO-`, domain `nbread.lol`. `TURNSTILE_SECRET_KEY` set via
   `wrangler secret put`. (`ADMIN_PUBKEY` unset ⇒ `/admin` 404s — optional.)
 - **DNS** (proxied): apex `A @ 192.0.2.1`, apex `AAAA @ 100::`, wildcard
-  `CNAME * → nbread.lol`. `www` left on the registrar CNAME (`pixie.porkbun.com`)
-  — follow-up: repoint or add a `www → apex` redirect.
+  `CNAME * → nbread.lol`, `www CNAME → nbread.lol` (all proxied). `www.nbread.lol`
+  301-redirects to the apex in the Worker (guard middleware; "www" is a reserved
+  handle, never a blog).
 - **SSL/TLS**: Full (strict); Universal SSL active covering `nbread.lol` +
   `*.nbread.lol`; Always Use HTTPS **on**; HSTS `max-age=15552000` (no
   `includeSubDomains`/preload); TLS 1.3 **on**.
@@ -112,8 +113,6 @@ Account **`830ade508fd3f90a2a591477cdbd399c`** (Kinseycagney), zone `nbread.lol`
 
 - **`ADMIN_PUBKEY`** unset — set via `wrangler secret put` to enable the `/admin`
   blocklist surface (unset ⇒ all `/admin` 404, which smoke asserts).
-- **`www.nbread.lol`** still CNAMEs to the registrar parking host — repoint or
-  add a `www → apex` redirect if wanted.
 
 The old `nostrbook` worker / `nostrbook.net` zone keep serving until explicitly
 retired — decommission is a separate step.

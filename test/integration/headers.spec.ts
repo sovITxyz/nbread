@@ -127,6 +127,22 @@ describe("apex class", () => {
     expectApexClass(res);
   });
 
+  it("www subdomain 301-redirects to the apex, preserving path + query", async () => {
+    const root = await SELF.fetch("https://www.nbread.lol/", {
+      redirect: "manual",
+    });
+    expect(root.status).toBe(301);
+    expect(root.headers.get("location")).toBe("https://nbread.lol/");
+
+    const deep = await SELF.fetch("https://www.nbread.lol/discover?q=hi", {
+      redirect: "manual",
+    });
+    expect(deep.status).toBe(301);
+    expect(deep.headers.get("location")).toBe(
+      "https://nbread.lol/discover?q=hi",
+    );
+  });
+
   it("/discover carries apex headers on miss AND on cache hit", async () => {
     const miss = await SELF.fetch("https://nbread.lol/discover");
     expect(miss.status).toBe(200);
