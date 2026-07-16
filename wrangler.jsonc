@@ -52,11 +52,10 @@
   "triggers": {
     "crons": ["*/15 * * * *"]
   },
-  // Disabled: the nbread.lol account (830ade…) has no workers.dev subdomain
-  // (account-global; auto-created on first Workers dashboard visit). Production
-  // serves via the nbread.lol zone routes below, so the workers.dev preview
-  // host is not needed. To re-enable Gate A previews, create an account
-  // workers.dev subdomain first, then flip this to true.
+  // Disabled: production serves via the nbread.lol zone routes below, so the
+  // workers.dev preview host is not needed. The account (830ade…) does have a
+  // workers.dev subdomain now (`nbread`, created to unblock the cron schedules
+  // API) — flip this to true to also publish to nbread.nbread.workers.dev.
   "workers_dev": false,
   "routes": [
     { "pattern": "nbread.lol/*", "zone_name": "nbread.lol" },

@@ -98,23 +98,22 @@ Account **`830ade508fd3f90a2a591477cdbd399c`** (Kinseycagney), zone `nbread.lol`
 - **SSL/TLS**: Full (strict); Universal SSL active covering `nbread.lol` +
   `*.nbread.lol`; Always Use HTTPS **on**; HSTS `max-age=15552000` (no
   `includeSubDomains`/preload); TLS 1.3 **on**.
-- **Worker `nbread`**: deployed with routes `nbread.lol/*` + `*.nbread.lol/*`.
-  `workers_dev` is **false** (this account has no workers.dev subdomain).
+- **Worker `nbread`**: deployed with routes `nbread.lol/*` + `*.nbread.lol/*`
+  and cron `*/15 * * * *`. `workers_dev` is **false** (production serves via the
+  zone routes); the account's workers.dev subdomain is `nbread` (created to
+  unblock the cron schedules API — flip `workers_dev` to true to also publish to
+  `nbread.nbread.workers.dev`).
 - **WAF**: `global-per-ip-throttle` (60 req/10s per IP+colo, block 10s, host
   `nbread.lol` + `*.nbread.lol`) + `scanner-paths-block` (`.php`, `/wp-`, `/.env`
   → block).
 - **Smoke**: `bash scripts/smoke.sh https://nbread.lol` → 54/54 green.
 
-### Outstanding
+### Outstanding (optional)
 
-- **Cron `*/15` not yet attached.** The schedules API returns error 10063 — the
-  account needs a **workers.dev subdomain** first (account-global, auto-created on
-  the first visit to the Workers dashboard, or `PUT /accounts/830ade…/workers/subdomain`).
-  Once it exists, re-run `wrangler deploy` (or `wrangler triggers deploy`) to
-  register the cron. Until then, blogs still mirror on-demand (npub/claim views);
-  only the 15-minute background refresh is inactive.
-- **`ADMIN_PUBKEY`** optional — set via `wrangler secret put` to enable the
-  `/admin` blocklist surface.
+- **`ADMIN_PUBKEY`** unset — set via `wrangler secret put` to enable the `/admin`
+  blocklist surface (unset ⇒ all `/admin` 404, which smoke asserts).
+- **`www.nbread.lol`** still CNAMEs to the registrar parking host — repoint or
+  add a `www → apex` redirect if wanted.
 
 The old `nostrbook` worker / `nostrbook.net` zone keep serving until explicitly
 retired — decommission is a separate step.
