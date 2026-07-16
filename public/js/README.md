@@ -1,7 +1,7 @@
 # public/js
 
-Client-side NIP-07 glue plus the hand-rolled editor (no build step, no
-dependencies — every file is a plain IIFE served as-is):
+Client-side NIP-07 glue plus the hand-rolled editor (no build step at serve
+time, no runtime dependencies — every file is a plain IIFE served as-is):
 
 - `login.js` (P4) — fetches a one-time challenge, signs the kind 22242 auth
   event via `window.nostr`, POSTs it to `/login`. Keys never leave the
@@ -26,3 +26,20 @@ dependencies — every file is a plain IIFE served as-is):
 
 Load order on the editor page matters: `editor-md.js` →
 `editor-toolbar.js` → `editor.js`.
+
+## vendor/
+
+- `vendor/nostr-crypto.js` — GENERATED-BUT-COMMITTED crypto bundle
+  (`globalThis.NbreadCrypto`): hex/utf-8/base64 utils, bech32 + npub/nsec
+  codecs (same BIP-173 implementation as `src/nostr/nip19.ts`), NIP-01
+  event ids byte-identical to `src/nostr/event.ts`, BIP-340 schnorr
+  sign/verify, NIP-44 v2, and legacy NIP-04. Built from
+  `scripts/vendor/crypto-entry.js` by `npm run build:vendor`
+  (esbuild, devDependency only — deploy never builds) and committed
+  unminified for auditability. Do NOT edit the artifact by hand: edit the
+  entry, rebuild, and commit both. CI rebuilds and fails on drift
+  (`git diff --exit-code` plus a `git status --porcelain` check so new
+  untracked build output also fails). All randomness comes from
+  `crypto.getRandomValues`. Unit-tested against the server primitives,
+  nostr-tools, and the official NIP-44 v2 vectors in
+  `test/unit/vendor-crypto.spec.ts`.
