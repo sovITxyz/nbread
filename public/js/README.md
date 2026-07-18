@@ -27,6 +27,9 @@ time, no runtime dependencies — every file is a plain IIFE served as-is):
   `nbread:preview-requested` event (dispatched by the Preview tab),
   caches the last previewed value, and calls
   `window.NbreadDraft.clear()` after a successful publish/delete.
+- `blossom.js` — image upload to public Blossom servers (BUD PUT
+  `/upload` + BUD-04 `/mirror`) authorized with an `NbreadSigner`-signed
+  kind-24242 event; loads after `signer.js` and before `editor-toolbar.js`.
 - `editor-md.js` — DOM-free markdown text-manipulation core
   (`globalThis.NbreadEditorMd`): every helper maps
   `(value, selStart, selEnd, ...)` to a
@@ -42,7 +45,9 @@ time, no runtime dependencies — every file is a plain IIFE served as-is):
 Load order matters (classic `<script src>` tags, no modules). The signer
 stack always loads first: `vendor/nostr-crypto.js` → `signer-core.js` →
 `signer.js` → `signer-nip46.js`. The login page then adds `login.js`; the
-editor page adds `editor-md.js` → `editor-toolbar.js` → `editor.js`.
+editor page adds `blossom.js` → `editor-md.js` → `editor-toolbar.js` →
+`editor.js` (`blossom.js` after the signer stack, before
+`editor-toolbar.js`).
 
 ## vendor/
 
