@@ -48,6 +48,13 @@ export function DocsPage() {
           Nostr client — the blog syncs from your relays within about 15
           minutes.
         </p>
+        <p>
+          Add images with the editor's image button, or by dragging or pasting
+          one straight into the editor. Images upload to public Blossom servers
+          (blossom.band plus a few mirrors for redundancy) and are inserted as
+          markdown. On the Amber-on-Android signer, uploads can't be signed
+          in-page, so paste an image URL instead.
+        </p>
 
         <h2>Your blog</h2>
         <p>

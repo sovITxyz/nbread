@@ -1,7 +1,9 @@
-// Editor toolbar + Write/Preview tabs + counter + localStorage autosave.
+// Editor toolbar + Write/Preview tabs + counter + localStorage autosave +
+// Blossom image uploads (toolbar button / drag-drop / paste).
 // Pure DOM wiring: all text math lives in editor-md.js (NbreadEditorMd)
 // and EVERY textarea mutation goes through replaceRange() below, whose
-// execCommand seam keeps each action a single native undo step.
+// execCommand seam keeps each action a single native undo step — including
+// the async placeholder->URL swap that an image upload lands.
 //
 // Preview seam: activating the Preview tab dispatches a
 // "nbread:preview-requested" CustomEvent on document; editor.js listens
@@ -40,8 +42,20 @@
   // so the whole replacement lands on the native undo stack as one step.
   // When it is unavailable/refused, fall back to setRangeText plus a
   // synthetic input event (undo degrades, behavior does not).
-  function replaceRange(instr) {
+  function replaceRange(instr, preserveFocus) {
     if (!instr) return;
+    // Async swaps (the upload placeholder->URL replacement) can land seconds
+    // later, while the user has moved on to the Title/Slug/Summary field.
+    // execCommand requires focusing the textarea, which would yank focus and
+    // the caret away from where they're typing. When preserveFocus is set and
+    // the textarea isn't the active element, edit through setRangeText (no
+    // focus grab, no selection change) — undo granularity degrades for this
+    // one case, but the user's typing elsewhere is not hijacked.
+    if (preserveFocus && document.activeElement !== contentEl) {
+      contentEl.setRangeText(instr.text, instr.start, instr.end, "preserve");
+      contentEl.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
     contentEl.focus();
     contentEl.setSelectionRange(instr.start, instr.end);
     var ok = false;
@@ -107,6 +121,10 @@
       applyFootnote();
       return true;
     }
+    if (name === "image") {
+      runImageAction();
+      return true;
+    }
     var fn = actions[name];
     if (!fn) return false;
     replaceRange(
@@ -114,6 +132,186 @@
     );
     return true;
   }
+
+  // --- Image uploads (Blossom) ------------------------------------------------------
+  // Three entry points — the toolbar button, drag-and-drop, and paste — all
+  // funnel through uploadAndInsert(): drop an "![uploading…]()" placeholder at
+  // the caret, PUT the bytes to Blossom, then swap the EXACT placeholder text
+  // for the final "![](<url>)". Matching on the placeholder text (not a caret
+  // offset) keeps the swap correct even if the user keeps typing mid-upload;
+  // if they delete it, the result is silently dropped.
+
+  var blossom = globalThis.NbreadBlossom;
+  var signer = globalThis.NbreadSigner;
+  var statusEl = document.getElementById("editor-status");
+  var ACCEPT_IMAGES = "image/png,image/jpeg,image/webp,image/gif";
+  var uploadSeq = 0;
+  var fileInput = null;
+
+  function setStatus(msg) {
+    if (statusEl) statusEl.textContent = msg;
+  }
+
+  // Synchronous readiness gate (a file picker must open in the user gesture,
+  // so we can't await signer.ready()): an upload is possible when Blossom is
+  // loaded, a signer method is configured, and it is NOT the Amber redirect
+  // signer (whose signEvent navigates away and never resolves).
+  function canUpload() {
+    return !!(
+      blossom &&
+      signer &&
+      typeof signer.method === "function" &&
+      signer.method() &&
+      !(typeof signer.isRedirectSigner === "function" && signer.isRedirectSigner())
+    );
+  }
+
+  function imageFilesFrom(fileList) {
+    var out = [];
+    if (!fileList) return out;
+    for (var i = 0; i < fileList.length; i++) {
+      var f = fileList[i];
+      if (f && typeof f.type === "string" && f.type.indexOf("image/") === 0) {
+        out.push(f);
+      }
+    }
+    return out;
+  }
+
+  // clipboardData exposes pasted images via files on modern browsers and via
+  // items elsewhere — check both.
+  function imageFilesFromClipboard(cd) {
+    var out = imageFilesFrom(cd.files);
+    if (out.length === 0 && cd.items) {
+      for (var i = 0; i < cd.items.length; i++) {
+        var it = cd.items[i];
+        if (it.kind === "file" && it.type && it.type.indexOf("image/") === 0) {
+          var f = it.getAsFile();
+          if (f) out.push(f);
+        }
+      }
+    }
+    return out;
+  }
+
+  function dragHasImage(dt) {
+    if (!dt) return false;
+    if (dt.items && dt.items.length) {
+      for (var i = 0; i < dt.items.length; i++) {
+        if (
+          dt.items[i].kind === "file" &&
+          dt.items[i].type &&
+          dt.items[i].type.indexOf("image/") === 0
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (dt.types) {
+      for (var j = 0; j < dt.types.length; j++) {
+        if (dt.types[j] === "Files") return true;
+      }
+    }
+    return false;
+  }
+
+  function insertPlaceholder(placeholder) {
+    var s = contentEl.selectionStart;
+    var e = contentEl.selectionEnd;
+    replaceRange({
+      start: s,
+      end: e,
+      text: placeholder,
+      selStart: s + placeholder.length,
+      selEnd: s + placeholder.length,
+    });
+  }
+
+  // Swap the first occurrence of `placeholder` for `replacement`, through the
+  // undo-safe seam. Returns false when the placeholder is gone (user deleted).
+  function replacePlaceholder(placeholder, replacement) {
+    var idx = contentEl.value.indexOf(placeholder);
+    if (idx === -1) return false;
+    // preserveFocus: this is an async swap that may fire while the user is
+    // typing in another field — don't steal focus back to the textarea.
+    replaceRange(
+      {
+        start: idx,
+        end: idx + placeholder.length,
+        text: replacement,
+        selStart: idx + replacement.length,
+        selEnd: idx + replacement.length,
+      },
+      true,
+    );
+    return true;
+  }
+
+  function uploadAndInsert(file) {
+    if (!blossom) return;
+    var id = ++uploadSeq;
+    var placeholder = "![uploading… #" + id + "]()";
+    insertPlaceholder(placeholder);
+    setStatus("Uploading image…");
+    blossom.uploadBlob(file, { signer: signer }).then(
+      function (res) {
+        replacePlaceholder(placeholder, "![](" + res.url + ")");
+        setStatus("Image uploaded.");
+      },
+      function (err) {
+        // Pull the placeholder back out on failure so no broken token remains.
+        replacePlaceholder(placeholder, "");
+        setStatus(
+          (err && err.message) || "Image upload failed. Please try again.",
+        );
+      },
+    );
+  }
+
+  function ensureFileInput() {
+    if (fileInput) return fileInput;
+    fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ACCEPT_IMAGES;
+    fileInput.style.display = "none";
+    fileInput.addEventListener("change", function () {
+      var f = fileInput.files && fileInput.files[0];
+      fileInput.value = ""; // let the same file be re-picked later
+      if (f) uploadAndInsert(f);
+    });
+    document.body.appendChild(fileInput);
+    return fileInput;
+  }
+
+  // Toolbar "image" button: open the picker when uploads are possible; else
+  // fall back to the classic URL-template insert so the button still works.
+  function runImageAction() {
+    if (canUpload()) {
+      ensureFileInput().click();
+      return;
+    }
+    replaceRange(
+      md.makeImage(contentEl.value, contentEl.selectionStart, contentEl.selectionEnd),
+    );
+  }
+
+  // Drag-and-drop image files onto the textarea.
+  contentEl.addEventListener("dragover", function (e) {
+    if (dragHasImage(e.dataTransfer)) e.preventDefault();
+  });
+  contentEl.addEventListener("drop", function (e) {
+    var files = e.dataTransfer ? imageFilesFrom(e.dataTransfer.files) : [];
+    if (files.length === 0) return; // let native drop (e.g. text) proceed
+    e.preventDefault();
+    if (!canUpload()) {
+      setStatus(
+        "Configure a signing key (not Amber) to upload images, or paste an image URL.",
+      );
+      return;
+    }
+    for (var i = 0; i < files.length; i++) uploadAndInsert(files[i]);
+  });
 
   // --- Toolbar: click delegation + roving tabindex ----------------------------------
 
@@ -223,6 +421,19 @@
   // of overwriting the selected text.
   contentEl.addEventListener("paste", function (e) {
     if (!e.clipboardData) return;
+    // A pasted image takes priority over the text-URL-to-link behavior below.
+    var imgFiles = imageFilesFromClipboard(e.clipboardData);
+    if (imgFiles.length > 0) {
+      e.preventDefault();
+      if (!canUpload()) {
+        setStatus(
+          "Configure a signing key (not Amber) to upload images, or paste an image URL.",
+        );
+        return;
+      }
+      for (var pi = 0; pi < imgFiles.length; pi++) uploadAndInsert(imgFiles[pi]);
+      return;
+    }
     var pasted = (e.clipboardData.getData("text/plain") || "").trim();
     if (!URL_RE.test(pasted)) return;
     var s = contentEl.selectionStart;

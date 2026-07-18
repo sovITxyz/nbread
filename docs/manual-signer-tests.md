@@ -165,3 +165,30 @@ allowlist. Uses [`nak`](https://github.com/fiatjaf/nak) (any NIP-01 CLI works).
       on a third-party long-form reader (e.g. habla.news) configured to include
       `wss://nbread.lol/relay`, and confirm it loads the nbread-hosted 30023 —
       reads are open (no auth) to anyone.
+
+## 9. Image upload (Blossom)
+
+Uploads go direct from the browser to public Blossom servers, authorized
+with a `NbreadSigner`-signed kind 24242 event. Run with an in-page signer
+(NIP-07 extension, NIP-46 remote, or pasted local key) unless noted.
+
+- [ ] **Button upload**: in the editor, click the image button and pick a
+      PNG → it uploads and inserts `![](https://blossom.band/…)`; the Preview
+      tab renders the image, and it renders on the published post too.
+- [ ] **Drag & drop**: drag an image file onto the editor textarea → same
+      insert + render as above.
+- [ ] **Paste**: copy an image to the clipboard and paste into the editor →
+      same insert + render.
+- [ ] **Oversized rejected**: try a file larger than 20 MiB → rejected
+      client-side with an error, nothing inserted, no upload request sent.
+- [ ] **Non-image rejected**: try a `.txt`/`.pdf` → rejected client-side,
+      nothing inserted.
+- [ ] **NIP-55 fallback (Amber on Android)**: with the Amber redirect
+      signer, the image button does NOT attempt an upload (signing would
+      navigate away) — it falls back to prompting for / inserting an image
+      URL instead.
+- [ ] **Devtools audit**: open Network, upload an image, and confirm the
+      `PUT` goes to a Blossom origin (`blossom.band` or a mirror) with an
+      `Authorization: Nostr …` header, and that the strict CSP
+      (`script-src 'self'`) does not block the upload (the connect/img
+      origins are allowed).
