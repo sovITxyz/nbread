@@ -121,6 +121,21 @@ describe("GET /dashboard/profile", () => {
     expect(config.extra).toEqual({ foo: { custom: true } });
   });
 
+  it("does not resurrect a deliberately absent nip05 on an existing profile", async () => {
+    // A stored kind 0 WITHOUT nip05 may mean the user removed it — the
+    // suggestion must not silently prefill (and get republished by the next
+    // unrelated save). It still appears as hint text below the field.
+    const ev = signProfileEvent({
+      created_at: 1_700_000_100,
+      content: { name: "alice" },
+    });
+    expect(await mirrorEvent(env, ev)).toBe("stored");
+    const cookie = await sessionCookieFor(ALICE_PK);
+    const html = await (await getProfilePage({ Cookie: cookie })).text();
+    expect(html).not.toContain('value="alice@nbread.lol"');
+    expect(html).toContain("alice@nbread.lol"); // the hint still offers it
+  });
+
   it("neutralizes hostile stored profile values (XSS)", async () => {
     const hostile = '</script><script>alert(1)</script>';
     const ev = signProfileEvent({
@@ -232,19 +247,60 @@ describe("POST /api/mirror — kind 0 (#11)", () => {
 });
 
 describe("storedProfileContent", () => {
-  it("splits known fields from extra keys with caps applied", () => {
+  it("splits known fields from extra keys, prefilled faithfully (no trim/caps)", () => {
+    // Republishing must not silently rewrite over-cap or padded values the
+    // user published elsewhere — prefill is verbatim; only upsertProfile's
+    // COLUMN copies are capped.
+    const longAbout = "x".repeat(PROFILE_FIELD_MAX.about + 500);
     const raw = JSON.stringify({
       content: JSON.stringify({
         name: "  padded  ",
-        about: "x".repeat(PROFILE_FIELD_MAX.about + 50),
+        about: longAbout,
         custom: 42,
       }),
     });
     const { fields, extra } = storedProfileContent(raw);
-    expect(fields.name).toBe("padded");
-    expect(fields.about).toHaveLength(PROFILE_FIELD_MAX.about);
+    expect(fields.name).toBe("  padded  ");
+    expect(fields.about).toBe(longAbout);
     expect(fields.lud16).toBe("");
     expect(extra).toEqual({ custom: 42 });
+  });
+
+  it("folds NIP-24 deprecated aliases into the canonical fields and drops them", () => {
+    const raw = JSON.stringify({
+      content: JSON.stringify({ displayName: "Old Name", username: "olduser" }),
+    });
+    const { fields, extra } = storedProfileContent(raw);
+    expect(fields.display_name).toBe("Old Name");
+    expect(fields.name).toBe("olduser");
+    // NOT preserved as extra — a republish removes the alias (NIP-24) so it
+    // can never fight a later edit of the canonical field.
+    expect(extra).toEqual({});
+  });
+
+  it("canonical fields beat their deprecated aliases regardless of key order", () => {
+    const raw = JSON.stringify({
+      content: JSON.stringify({ displayName: "Stale", display_name: "Current" }),
+    });
+    const { fields, extra } = storedProfileContent(raw);
+    expect(fields.display_name).toBe("Current");
+    expect(extra).toEqual({});
+  });
+
+  it('preserves a literal "__proto__" content key as extra DATA', () => {
+    // A plain-object extra would lose the key to the inherited setter (and
+    // take the relay-controlled value as its prototype).
+    const raw = JSON.stringify({
+      content: '{"name":"a","__proto__":{"custom":1},"other":"kept"}',
+    });
+    const { extra } = storedProfileContent(raw);
+    expect(Object.getOwnPropertyDescriptor(extra, "__proto__")?.value).toEqual({
+      custom: 1,
+    });
+    expect(Object.getPrototypeOf(extra)).toBeNull();
+    const json = JSON.stringify(extra);
+    expect(json).toContain('"__proto__":{"custom":1}');
+    expect(json).toContain('"other":"kept"');
   });
 
   it("returns empty prefill on malformed raw or content JSON", () => {

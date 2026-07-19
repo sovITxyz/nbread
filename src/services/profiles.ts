@@ -121,14 +121,31 @@ export type ProfileContentFields = {
 };
 
 /**
+ * NIP-24 deprecated aliases of form fields. Their value prefills the
+ * canonical field when it is absent, and they are dropped from the republish
+ * either way (NIP-24: "should be ignored or removed when found in the wild")
+ * — carrying them in `extra` would fight every future edit of the canonical
+ * field with a stale invisible copy.
+ */
+const DEPRECATED_ALIASES: Record<string, keyof ProfileContentFields> = {
+  displayName: "display_name",
+  username: "name",
+};
+
+/**
  * Parse a stored `profiles.raw` event back into the editable content fields
  * (the columns only cover a subset — display_name/banner/website/lud06 live
  * solely in the event content) plus every OTHER content key verbatim. The
  * profile form republishes the whole kind 0, so unknown fields (custom app
- * metadata, deprecated aliases) must ride along or a save would silently
- * erase them. Defensive on both JSON layers: malformed relay data prefills
- * as empty, never throws. Fields get the same trim + caps as upsertProfile
- * so the form shows exactly what a re-publish would persist.
+ * metadata) must ride along or a save would silently erase them. Defensive
+ * on both JSON layers: malformed relay data prefills as empty, never throws.
+ *
+ * Prefill is FAITHFUL: no trim, no caps — the caps in upsertProfile bound
+ * what the D1 columns store, but truncating here would rewrite the user's
+ * canonical network-wide profile on the next unrelated edit (the form's
+ * maxlength attributes still cap what can be TYPED). `extra` is built
+ * null-prototype so a literal "__proto__" content key survives as data
+ * instead of vanishing into the inherited setter.
  */
 export function storedProfileContent(raw: string): {
   fields: ProfileContentFields;
@@ -145,7 +162,7 @@ export function storedProfileContent(raw: string): {
     lud16: "",
     lud06: "",
   };
-  const extra: Record<string, unknown> = {};
+  const extra: Record<string, unknown> = Object.create(null);
   try {
     const ev: unknown = JSON.parse(raw);
     if (ev === null || typeof ev !== "object" || Array.isArray(ev)) {
@@ -161,9 +178,17 @@ export function storedProfileContent(raw: string): {
     for (const key of Object.keys(d)) {
       if (Object.hasOwn(fields, key)) {
         const k = key as keyof ProfileContentFields;
-        fields[k] = strField(d[k], PROFILE_FIELD_MAX[k]) ?? "";
-      } else {
+        if (typeof d[k] === "string") fields[k] = d[k];
+      } else if (!Object.hasOwn(DEPRECATED_ALIASES, key)) {
         extra[key] = d[key];
+      }
+    }
+    // Alias fallback AFTER the main pass so a canonical field always wins
+    // regardless of key order in the stored content.
+    for (const [alias, canonical] of Object.entries(DEPRECATED_ALIASES)) {
+      const value = d[alias];
+      if (fields[canonical] === "" && typeof value === "string") {
+        fields[canonical] = value;
       }
     }
   } catch {

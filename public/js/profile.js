@@ -92,8 +92,10 @@
   // Metadata object for the kind 0 content: the preserved non-form keys
   // first, then every non-empty form field on top. A field the user cleared
   // is simply absent (kind 0 is a full replacement, absence deletes it).
+  // Null-prototype so a preserved literal "__proto__" key stays a data key
+  // instead of vanishing into the inherited setter.
   function buildMetadata() {
-    var out = {};
+    var out = Object.create(null);
     var extra = cfg.extra;
     if (extra !== null && typeof extra === "object" && !Array.isArray(extra)) {
       for (var k in extra) {

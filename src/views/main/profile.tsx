@@ -39,6 +39,14 @@ export function ProfilePage(props: {
     ? `${props.handle}@${props.mainHost}`
     : null;
   const f = props.fields;
+  // Pre-fill the suggestion only for a FIRST profile (nothing published yet):
+  // an existing kind 0 without nip05 may mean the user deliberately removed
+  // it, and a silent prefill would resurrect it on the next unrelated save.
+  // The hint below the field still offers the identifier either way.
+  const nip05Value =
+    f.nip05 === "" && props.prevCreatedAt === null && suggestedNip05
+      ? suggestedNip05
+      : f.nip05;
 
   return (
     <Layout title="Edit profile — nbread.lol">
@@ -199,7 +207,7 @@ export function ProfilePage(props: {
                 name="nip05"
                 type="text"
                 maxlength={PROFILE_FIELD_MAX.nip05}
-                value={f.nip05 === "" && suggestedNip05 ? suggestedNip05 : f.nip05}
+                value={nip05Value}
                 placeholder="you@example.com"
                 spellcheck={false}
               />
